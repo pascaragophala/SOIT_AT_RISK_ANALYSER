@@ -28,18 +28,20 @@ def _sort_weeks_like(weeks: pd.Series) -> list:
     except Exception:
         return list(weeks.astype(str))
 
-def _risk_rank_and_label(val: str) -> tuple[int, str]:
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return 0, "Unknown"
-    s = str(val).strip().lower()
-    # tolerant mapping
-    if "high" in s or "red" in s:
-        return 3, "High"
-    if "med" in s or "amber" in s or "yellow" in s:
-        return 2, "Medium"
-    if "low" in s or "green" in s:
-        return 1, "Low"
-    return 0, "Unknown"
+def _sid(x) -> str:
+    """Normalize student ID to a clean string (strip trailing .0 etc)."""
+    try:
+        if pd.isna(x):
+            return ""
+    except Exception:
+        pass
+    if isinstance(x, int):
+        return str(x)
+    if isinstance(x, float):
+        return str(int(x)) if x.is_integer() else str(x)
+    s = str(x).strip()
+    s = re.sub(r"\.0+$", "", s)  # "25302469.0" -> "25302469"
+    return s
 
 def build_report(df: pd.DataFrame):
     df = df.copy()
@@ -152,7 +154,7 @@ def build_report(df: pd.DataFrame):
         for w in totals.index:
             resolved_rate[str(w)] = round((int(trues.loc[w]) / int(totals.loc[w])) * 100, 1) if int(totals.loc[w]) else 0.0
 
-    # ---------- Student analytics ----------
+    # ---------- Student analytics (names + clean IDs) ----------
     student_enabled = bool(col_student)
     student_lookup = []
     ps_modules_att = {}
@@ -163,68 +165,80 @@ def build_report(df: pd.DataFrame):
     global_top_students_att = []
 
     if student_enabled:
-        # Build labels "ID — Name"
+        # Build a stable "id -> full name" map using clean string IDs
+        name_map = {}
         if col_name:
-            name_map = (df.groupby(col_student)[col_name]
-                        .agg(lambda s: s.dropna().astype(str).mode().iat[0] if not s.dropna().empty else ""))
-        else:
-            name_map = pd.Series([], dtype="object")
+            tmp = df[[col_student, col_name]].dropna(subset=[col_student]).copy()
+            tmp["_sid"] = tmp[col_student].apply(_sid)
+            # pick the most frequent non-empty name for each ID
+            nm_series = tmp.groupby("_sid")[col_name].agg(
+                lambda s: s.dropna().astype(str).mode().iat[0] if not s.dropna().empty else ""
+            ).astype(str)
+            name_map = nm_series.to_dict()
 
-        students_order = list(df[col_student].dropna().astype(str).unique())
+        # All known student IDs (clean)
+        students_order = pd.unique(df[col_student].dropna().apply(_sid)).tolist()
         for sid in students_order:
-            nm = (name_map[sid] if sid in name_map.index else "").strip()
-            label = f"{sid} — {nm}" if nm else str(sid)
-            student_lookup.append({"id": str(sid), "label": label, "name": nm})
+            nm = (name_map.get(sid, "") or "").strip()
+            label = f"{sid} — {nm}" if nm else sid
+            student_lookup.append({"id": sid, "label": label, "name": nm})
 
         # Per-student non-attendance by module/week
         if att_mask is not None and col_module:
             grp = df[att_mask].groupby([col_student, col_module]).size()
-            for (sid, mod), v in grp.items():
-                sid, mod = str(sid), str(mod)
+            for (sid_raw, mod), v in grp.items():
+                sid = _sid(sid_raw); mod = str(mod)
                 ps_modules_att.setdefault(sid, {})[mod] = int(v)
 
         if att_mask is not None and col_week:
             grp = df[att_mask].groupby([col_student, col_week]).size()
-            for (sid, wk), v in grp.items():
-                sid, wk = str(sid), str(wk)
+            for (sid_raw, wk), v in grp.items():
+                sid = _sid(sid_raw); wk = str(wk)
                 ps_weeks_att.setdefault(sid, {})[wk] = int(v)
 
         # Risk by module (max severity seen per module for each student)
         if col_risk and col_module:
-            ranks, labels = zip(*df[col_risk].map(_risk_rank_and_label))
-            df["_risk_rank"] = list(ranks)
-            df["_risk_label"] = list(labels)
+            # map each row to a rank
+            rank_map = {}
+            labels = []
+            for rv in df[col_risk].tolist():
+                r, lbl = (3, "High") if (isinstance(rv, str) and "high" in rv.lower()) else \
+                         ((2, "Medium") if (isinstance(rv, str) and ("med" in rv.lower() or "amber" in rv.lower() or "yellow" in rv.lower())) else \
+                         ((1, "Low") if (isinstance(rv, str) and "low" in rv.lower()) else (0, "Unknown")))
+                labels.append(lbl)
+            df["_risk_rank"] = [3 if l=="High" else 2 if l=="Medium" else 1 if l=="Low" else 0 for l in labels]
+
             grp = df.groupby([col_student, col_module])["_risk_rank"].max()
-            for (sid, mod), rank in grp.items():
-                sid, mod = str(sid), str(mod)
+            for (sid_raw, mod), rank in grp.items():
+                sid = _sid(sid_raw); mod = str(mod)
                 label = {3: "High", 2: "Medium", 1: "Low", 0: "Unknown"}.get(int(rank), "Unknown")
                 ps_risk_module_max.setdefault(sid, {})[mod] = label
 
-        # Week x risk counts per student (compact mapping)
+        # Week x risk counts per student
         if col_week and col_risk:
             grp = df.groupby([col_student, col_week, col_risk]).size()
-            for (sid, wk, rk), v in grp.items():
-                sid, wk, rk = str(sid), str(wk), str(rk)
+            for (sid_raw, wk, rk), v in grp.items():
+                sid = _sid(sid_raw); wk = str(wk); rk = str(rk)
                 ps_week_risk_counts.setdefault(sid, {}).setdefault(wk, {})[rk] = int(v)
 
-        # Top students who miss class per module + global
+        # Top students who miss class per module + global (labels include names)
         if att_mask is not None:
             if col_module:
                 grp = df[att_mask].groupby([col_module, col_student]).size()
-                for (mod, sid), v in grp.items():
-                    mod, sid = str(mod), str(sid)
-                    label = next((x["label"] for x in student_lookup if x["id"] == sid), sid)
+                for (mod, sid_raw), v in grp.items():
+                    sid = _sid(sid_raw); mod = str(mod)
+                    nm = (name_map.get(sid, "") or "").strip()
+                    label = f"{sid} — {nm}" if nm else sid
                     module_top_students_att.setdefault(mod, []).append({"id": sid, "label": label, "count": int(v)})
-                # sort each module list
                 for mod in list(module_top_students_att.keys()):
                     module_top_students_att[mod].sort(key=lambda x: x["count"], reverse=True)
-                    # keep a reasonable number to avoid huge JSON
                     module_top_students_att[mod] = module_top_students_att[mod][:100]
 
             grp_global = df[att_mask].groupby(col_student).size().sort_values(ascending=False)
-            for sid, v in grp_global.items():
-                sid = str(sid)
-                label = next((x["label"] for x in student_lookup if x["id"] == sid), sid)
+            for sid_raw, v in grp_global.items():
+                sid = _sid(sid_raw)
+                nm = (name_map.get(sid, "") or "").strip()
+                label = f"{sid} — {nm}" if nm else sid
                 global_top_students_att.append({"id": sid, "label": label, "count": int(v)})
             global_top_students_att = global_top_students_att[:200]
 
