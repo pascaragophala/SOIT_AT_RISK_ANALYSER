@@ -112,7 +112,6 @@
     <section class="grid grid-2">
       <div class="card">
         <h3 class="card__title">Modules (unique students)</h3>
-        <!-- Dynamic height via JS, clamped -->
         <div class="chart" id="moduleChartWrap"><canvas id="moduleChart"></canvas></div>
       </div>
       <div class="card" id="resolvedCard">
@@ -138,6 +137,75 @@
       <div class="chart h-300"><canvas id="resolvedRateChart"></canvas></div>
     </section>
     {% endif %}
+
+    <!-- ====================== Student Analysis ====================== -->
+    {% if report.student_enabled %}
+    <section class="card">
+      <h3 class="card__title">Student analysis</h3>
+
+      <div class="filters">
+        <div class="filters__group" style="min-width:260px;">
+          <label for="studentSearch">Find student</label>
+          <input id="studentSearch" list="studentsList" placeholder="Type ID or name" style="padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--panel-2);color:var(--text);width:100%;">
+          <datalist id="studentsList">
+            {% for s in report.student_lookup %}
+            <option value="{{ s.label }}"></option>
+            {% endfor %}
+          </datalist>
+        </div>
+
+        <div class="filters__group">
+          <label for="topModuleSelect">Top students for module</label>
+          <select id="topModuleSelect">
+            <option value="">All modules</option>
+            {% for m in report.modules %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+          </select>
+        </div>
+
+        <div class="filters__group">
+          <label for="topNStudent">Show</label>
+          <select id="topNStudent">
+            <option value="5">Top 5</option>
+            <option value="10" selected>Top 10</option>
+            <option value="20">Top 20</option>
+          </select>
+        </div>
+
+        <div class="filters__group">
+          <button id="renderTopList" class="btn btn-outline">Refresh list</button>
+          <button id="analyzeStudentBtn" class="btn">Analyze selected student</button>
+        </div>
+      </div>
+
+      <div id="topStudentList" class="muted tiny" style="margin-top:8px;"></div>
+      <p id="studentSelectedNote" class="muted tiny" style="margin-top:6px;"></p>
+    </section>
+
+    <section class="grid grid-2" id="studentCharts">
+      <div class="card" id="stuModAttCard">
+        <h3 class="card__title">Student non-attendance by module</h3>
+        <div class="chart" id="stuModAttWrap"><canvas id="stuModAttChart"></canvas></div>
+      </div>
+      <div class="card" id="stuWeekAttCard">
+        <h3 class="card__title">Student non-attendance by week</h3>
+        <div class="chart h-300"><canvas id="stuWeekAttChart"></canvas></div>
+      </div>
+    </section>
+
+    <section class="grid grid-2">
+      <div class="card" id="stuWeekRiskCard">
+        <h3 class="card__title">Student risk by week</h3>
+        <div class="chart h-300"><canvas id="stuWeekRiskChart"></canvas></div>
+      </div>
+      <div class="card" id="stuRiskModuleCard">
+        <h3 class="card__title">Risk by module (max severity)</h3>
+        <div id="stuRiskModuleTable" class="table-wrapper">
+          <!-- JS injects a small table -->
+        </div>
+      </div>
+    </section>
+    {% endif %}
+    <!-- ==================== end Student Analysis ==================== -->
 
     {% if report.repeated_students and report.repeated_students.top_counts %}
     <section class="card">
