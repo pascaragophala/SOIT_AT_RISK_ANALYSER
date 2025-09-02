@@ -20,10 +20,11 @@
   Chart.defaults.font.family = '"Inter", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif';
   Chart.defaults.plugins.legend.labels.usePointStyle = true;
 
-  // ======= Helpers =======
+  // ========= helpers =========
   const hideCardByCanvas = (id) => { const c = document.getElementById(id); if (c) c.closest(".card").classList.add("hidden"); };
   const hideEl = (id) => { const e = document.getElementById(id); if (e) e.classList.add("hidden"); };
   const showEl = (id) => { const e = document.getElementById(id); if (e) e.classList.remove("hidden"); };
+  function normalizeId(x) { return String(x ?? "").trim().replace(/\.0+$/, ""); }
 
   function makeBar(ctx, labels, data, horizontal = false) {
     return new Chart(ctx, {
@@ -76,29 +77,20 @@
     return withNum.map(x => x.w);
   }
 
-  // ======= Static charts =======
+  // ======= existing charts (unchanged)… =======
   let moduleChart, riskChart, reasonChart, resolvedChart, weekRiskChart, nonAttendanceChart, resolvedRateChart;
-
   if (report.risk_counts && Object.keys(report.risk_counts).length) {
-    riskChart = makeBar(document.getElementById("riskChart"),
-      Object.keys(report.risk_counts), Object.values(report.risk_counts));
+    riskChart = makeBar(document.getElementById("riskChart"), Object.keys(report.risk_counts), Object.values(report.risk_counts));
   } else { hideCardByCanvas("riskChart"); }
-
   if (report.by_reason && Object.keys(report.by_reason).length) {
-    reasonChart = makeBar(document.getElementById("reasonChart"),
-      Object.keys(report.by_reason), Object.values(report.by_reason));
+    reasonChart = makeBar(document.getElementById("reasonChart"), Object.keys(report.by_reason), Object.values(report.by_reason));
   } else { hideCardByCanvas("reasonChart"); }
-
   if (report.resolved_counts && Object.keys(report.resolved_counts).length) {
-    resolvedChart = makeDoughnut(document.getElementById("resolvedChart"),
-      Object.keys(report.resolved_counts), Object.values(report.resolved_counts));
+    resolvedChart = makeDoughnut(document.getElementById("resolvedChart"), Object.keys(report.resolved_counts), Object.values(report.resolved_counts));
   } else { hideCardByCanvas("resolvedChart"); }
-
   if (report.week_risk && report.week_risk.weeks && report.week_risk.series && report.week_risk.weeks.length) {
-    weekRiskChart = makeLine(document.getElementById("weekRiskChart"),
-      report.week_risk.weeks, report.week_risk.series);
+    weekRiskChart = makeLine(document.getElementById("weekRiskChart"), report.week_risk.weeks, report.week_risk.series);
   } else { hideCardByCanvas("weekRiskChart"); }
-
   if (report.by_week_attendance && Object.keys(report.by_week_attendance).length) {
     const weeks = sortedWeeks(Object.keys(report.by_week_attendance));
     const vals = weeks.map(w => report.by_week_attendance[w] || 0);
@@ -109,7 +101,6 @@
         scales: { x: { grid: { display: false } }, y: { beginAtZero: true, ticks: { precision: 0 } } } }
     });
   } else { hideCardByCanvas("nonAttendanceChart"); }
-
   if (report.resolved_rate && Object.keys(report.resolved_rate).length) {
     const weeks = sortedWeeks(Object.keys(report.resolved_rate));
     const vals = weeks.map(w => report.resolved_rate[w]);
@@ -121,7 +112,7 @@
     });
   } else { hideCardByCanvas("resolvedRateChart"); }
 
-  // ======= Modules chart with filters (kept from earlier) =======
+  // ======= modules chart/filter (same as before) =======
   const weekSel  = document.getElementById("weekFilter");
   const scopeSel = document.getElementById("moduleScope");
   const basisSel = document.getElementById("moduleBasis");
@@ -134,17 +125,11 @@
     const topN = scope === "top3_att" ? 3 : scope === "top5_att" ? 5 : scope === "top10_att" ? 10 : null;
 
     if (basis === "attendance") {
-      if (week && report.by_week_module_attendance && report.by_week_module_attendance[week]) {
-        dataMap = report.by_week_module_attendance[week];
-      } else if (report.by_module_attendance) {
-        dataMap = report.by_module_attendance;
-      }
+      dataMap = (week && report.by_week_module_attendance && report.by_week_module_attendance[week])
+        ? report.by_week_module_attendance[week] : (report.by_module_attendance || {});
     } else {
-      if (week && report.by_week_module_all && report.by_week_module_all[week]) {
-        dataMap = report.by_week_module_all[week];
-      } else if (report.by_module) {
-        dataMap = report.by_module;
-      }
+      dataMap = (week && report.by_week_module_all && report.by_week_module_all[week])
+        ? report.by_week_module_all[week] : (report.by_module || {});
     }
 
     let pairs = Object.entries(dataMap).map(([k, v]) => [String(k), Number(v)]);
@@ -157,29 +142,21 @@
     const wrap = document.getElementById("moduleChartWrap");
     const ctx  = document.getElementById("moduleChart");
     if (!wrap || !ctx) return;
-
-    const week  = weekSel ? weekSel.value : "";
-    const scope = scopeSel ? scopeSel.value : "all";
-    const basis = basisSel ? basisSel.value : "all";
-
-    const { labels, values } = getModuleCounts({ week, basis, scope });
-
+    const { labels, values } = getModuleCounts({
+      week: weekSel?.value || "", basis: basisSel?.value || "all", scope: scopeSel?.value || "all"
+    });
     if (!labels.length) { hideCardByCanvas("moduleChart"); return; }
     setDynamicHeight(wrap, labels.length);
     if (moduleChart) moduleChart.destroy();
     moduleChart = makeBar(ctx, labels, values, true);
   }
   renderModuleChart();
-  if (applyBtn) applyBtn.addEventListener("click", (e) => { e.preventDefault(); renderModuleChart(); });
-  if (resetBtn)  resetBtn.addEventListener("click", (e) => {
-    e.preventDefault();
-    if (weekSel) weekSel.value = "";
-    if (scopeSel) scopeSel.value = "all";
-    if (basisSel) basisSel.value = "all";
-    renderModuleChart();
+  applyBtn?.addEventListener("click", (e) => { e.preventDefault(); renderModuleChart(); });
+  resetBtn?.addEventListener("click", (e) => {
+    e.preventDefault(); if (weekSel) weekSel.value = ""; if (scopeSel) scopeSel.value = "all"; if (basisSel) basisSel.value = "all"; renderModuleChart();
   });
 
-  // ======= Student analysis =======
+  // ======= student analysis (names + clean IDs) =======
   if (report.student_enabled) {
     const studentSearch = document.getElementById("studentSearch");
     const topModuleSelect = document.getElementById("topModuleSelect");
@@ -189,16 +166,16 @@
     const topStudentList = document.getElementById("topStudentList");
     const studentSelectedNote = document.getElementById("studentSelectedNote");
 
-    // quick lookup label -> id
+    // Maps both ways
     const labelToId = {};
-    (report.student_lookup || []).forEach(s => { labelToId[s.label] = s.id; });
+    const idToLabel = {};
+    (report.student_lookup || []).forEach(s => { labelToId[s.label] = s.id; idToLabel[s.id] = s.label; });
 
-    // charts
     let stuModAttChart, stuWeekAttChart, stuWeekRiskChart;
 
     function renderTopList() {
-      const mod = topModuleSelect ? topModuleSelect.value : "";
-      const n = parseInt(topNStudent ? topNStudent.value : "10", 10) || 10;
+      const mod = topModuleSelect?.value || "";
+      const n = parseInt(topNStudent?.value || "10", 10) || 10;
       let list = [];
 
       if (mod && report.module_top_students_att && report.module_top_students_att[mod]) {
@@ -212,32 +189,30 @@
         return;
       }
 
-      // clickable pills
+      // Include full-name labels; keep count in UI only
       topStudentList.innerHTML = list.map(x =>
-        `<button class="btn btn-outline" data-sid="${x.id}" style="margin:4px 6px 0 0;">${x.label} (${x.count})</button>`
+        `<button class="btn btn-outline" data-sid="${x.id}" data-label="${x.label}" style="margin:4px 6px 0 0;">${x.label} (${x.count})</button>`
       ).join("");
 
-      topStudentList.querySelectorAll("button[data-sid]").forEach(btn => {
-        btn.addEventListener("click", () => {
-          studentSearch.value = btn.textContent.replace(/\s\(\d+\)$/, ""); // set label
-          analyzeStudent(btn.getAttribute("data-sid"));
+      topStudentList.querySelectorAll("button[data-sid]").forEach(b => {
+        b.addEventListener("click", () => {
+          if (studentSearch) studentSearch.value = b.dataset.label; // set "ID — Name"
+          analyzeStudent(b.dataset.sid);
         });
       });
     }
 
     function analyzeStudent(sid) {
-      // If no sid, try to map from search box value
       if (!sid) {
-        const label = (studentSearch && studentSearch.value) || "";
-        sid = labelToId[label] || null;
+        const typed = (studentSearch?.value || "");
+        sid = labelToId[typed] || normalizeId(typed); // accept plain ID too
       }
       if (!sid) {
         studentSelectedNote.textContent = "Pick a student (type to search, or click from the list).";
         return;
       }
 
-      // Update header note
-      studentSelectedNote.textContent = `Selected: ${Object.keys(labelToId).find(k => labelToId[k] === sid) || sid}`;
+      studentSelectedNote.textContent = `Selected: ${idToLabel[sid] || sid}`;
 
       // 1) Non-attendance by module
       const modMap = (report.ps_modules_att && report.ps_modules_att[sid]) || {};
@@ -265,10 +240,7 @@
       const wkRisk = (report.ps_week_risk_counts && report.ps_week_risk_counts[sid]) || {};
       const wks = sortedWeeks(Object.keys(wkRisk));
       const riskNames = Array.from(new Set([].concat(...wks.map(w => Object.keys(wkRisk[w])))));
-      const series = riskNames.map(name => ({
-        name,
-        data: wks.map(w => (wkRisk[w][name] || 0))
-      }));
+      const series = riskNames.map(name => ({ name, data: wks.map(w => (wkRisk[w][name] || 0)) }));
       if (stuWeekRiskChart) stuWeekRiskChart.destroy();
       if (wks.length && riskNames.length) {
         stuWeekRiskChart = makeLine(document.getElementById("stuWeekRiskChart"), wks, series);
@@ -280,14 +252,11 @@
       const tblWrap = document.getElementById("stuRiskModuleTable");
       if (Object.keys(riskMod).length) {
         const rows = Object.entries(riskMod).sort((a,b)=>a[0].localeCompare(b[0]));
-        const html = `
+        tblWrap.innerHTML = `
           <table>
             <thead><tr><th>Module</th><th>Max risk</th></tr></thead>
-            <tbody>
-              ${rows.map(([m, r]) => `<tr><td>${m}</td><td>${r}</td></tr>`).join("")}
-            </tbody>
+            <tbody>${rows.map(([m, r]) => `<tr><td>${m}</td><td>${r}</td></tr>`).join("")}</tbody>
           </table>`;
-        tblWrap.innerHTML = html;
         showEl("stuRiskModuleCard");
       } else {
         tblWrap.innerHTML = "<p class='muted tiny'>No risk information for this student.</p>";
@@ -297,7 +266,7 @@
 
     // initial render
     renderTopList();
-    if (renderTopListBtn) renderTopListBtn.addEventListener("click", (e) => { e.preventDefault(); renderTopList(); });
-    if (analyzeStudentBtn) analyzeStudentBtn.addEventListener("click", (e) => { e.preventDefault(); analyzeStudent(); });
+    renderTopListBtn?.addEventListener("click", (e) => { e.preventDefault(); renderTopList(); });
+    analyzeStudentBtn?.addEventListener("click", (e) => { e.preventDefault(); analyzeStudent(); });
   }
 })();
