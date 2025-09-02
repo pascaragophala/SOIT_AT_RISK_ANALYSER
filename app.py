@@ -10,7 +10,7 @@ ALLOWED_EXTENSIONS = {"xlsx", "xls"}
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# ---------- JSON-safety helpers ----------
+# ---------- JSON safety ----------
 def _counts_to_json_safe(series: pd.Series) -> dict:
     safe = {}
     for k, v in series.items():
@@ -22,12 +22,24 @@ def _list_int(values) -> list:
     return [int(x) for x in list(values)]
 
 def _sort_weeks_like(weeks: pd.Series) -> list:
-    # Sort strings like "Week1", "Week2", ..., else leave order
     try:
         nums = weeks.astype(str).str.extract(r"(\d+)", expand=False).fillna("0").astype(int)
         return [w for _, w in sorted(zip(nums, weeks.astype(str)))]
     except Exception:
         return list(weeks.astype(str))
+
+def _risk_rank_and_label(val: str) -> tuple[int, str]:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return 0, "Unknown"
+    s = str(val).strip().lower()
+    # tolerant mapping
+    if "high" in s or "red" in s:
+        return 3, "High"
+    if "med" in s or "amber" in s or "yellow" in s:
+        return 2, "Medium"
+    if "low" in s or "green" in s:
+        return 1, "Low"
+    return 0, "Unknown"
 
 def build_report(df: pd.DataFrame):
     df = df.copy()
@@ -59,7 +71,7 @@ def build_report(df: pd.DataFrame):
 
     # Weeks and modules
     weeks   = _sort_weeks_like(df[col_week].dropna().unique()) if col_week else []
-    modules = sorted(df[col_module].dropna().unique().astype(str)) if col_module else []
+    modules = sorted(df[col_module].dropna().astype(str).unique()) if col_module else []
 
     # Unique students by module (overall)
     by_module = {}
@@ -71,7 +83,7 @@ def build_report(df: pd.DataFrame):
         )
         by_module = {str(k): int(v) for k, v in tmp.items()}
 
-    # Attendance detector (very tolerant)
+    # Non-attendance detector (tolerant)
     att_mask = None
     if col_reason:
         att_regex = r"(absent|attendance|attend|no\s*show|did\s*not\s*attend|not\s*attend|missed\s*class|no\s*class\s*attendance)"
@@ -83,19 +95,18 @@ def build_report(df: pd.DataFrame):
     by_week_module_all = {}
     by_week_module_att = {}
 
-    # Helper to count unique students if we have IDs, else row counts
     def _count(series_groupby):
         return series_groupby.nunique() if col_student else series_groupby.size()
 
-    if col_module and col_student:
-        if att_mask is not None:
-            tmp_att = _count(df[att_mask].groupby(col_module)[col_student]).sort_values(ascending=False)
-            by_module_att = {str(k): int(v) for k, v in tmp_att.items()}
+    if col_module and col_student and att_mask is not None:
+        tmp_att = _count(df[att_mask].groupby(col_module)[col_student]).sort_values(ascending=False)
+        by_module_att = {str(k): int(v) for k, v in tmp_att.items()}
 
-    if col_week:
-        if att_mask is not None:
-            tmp_week_att = _count(df[att_mask].groupby(col_week)[col_student if col_student else df.columns[0]])
-            by_week_att = {str(k): int(v) for k, v in tmp_week_att.items()}
+    if col_week and att_mask is not None:
+        base = df[att_mask]
+        key = col_student if col_student else df.columns[0]
+        tmp_week_att = base.groupby(col_week)[key].nunique() if col_student else base.groupby(col_week).size()
+        by_week_att = {str(k): int(v) for k, v in tmp_week_att.items()}
 
     if col_week and col_module:
         # All reasons, by week x module
@@ -103,8 +114,7 @@ def build_report(df: pd.DataFrame):
         s_all = _count(g_all[col_student] if col_student else g_all.size())
         nested_all = {}
         for (w, m), v in s_all.items():
-            w, m = str(w), str(m)
-            nested_all.setdefault(w, {})[m] = int(v)
+            nested_all.setdefault(str(w), {})[str(m)] = int(v)
         by_week_module_all = nested_all
 
         if att_mask is not None:
@@ -112,8 +122,7 @@ def build_report(df: pd.DataFrame):
             s_att = _count(g_att[col_student] if col_student else g_att.size())
             nested_att = {}
             for (w, m), v in s_att.items():
-                w, m = str(w), str(m)
-                nested_att.setdefault(w, {})[m] = int(v)
+                nested_att.setdefault(str(w), {})[str(m)] = int(v)
             by_week_module_att = nested_att
 
     # Week x Risk pivot (for the line chart)
@@ -126,7 +135,6 @@ def build_report(df: pd.DataFrame):
             aggfunc="count",
             fill_value=0,
         )
-        # Sort Weeks
         pivot = pivot.reindex(_sort_weeks_like(pivot.index.to_series()))
         week_risk = {
             "weeks": [str(x) for x in list(pivot.index)],
@@ -143,6 +151,82 @@ def build_report(df: pd.DataFrame):
         trues = grp.apply(lambda g: int(truthy.loc[g.index].sum()))
         for w in totals.index:
             resolved_rate[str(w)] = round((int(trues.loc[w]) / int(totals.loc[w])) * 100, 1) if int(totals.loc[w]) else 0.0
+
+    # ---------- Student analytics ----------
+    student_enabled = bool(col_student)
+    student_lookup = []
+    ps_modules_att = {}
+    ps_weeks_att = {}
+    ps_risk_module_max = {}
+    ps_week_risk_counts = {}
+    module_top_students_att = {}
+    global_top_students_att = []
+
+    if student_enabled:
+        # Build labels "ID — Name"
+        if col_name:
+            name_map = (df.groupby(col_student)[col_name]
+                        .agg(lambda s: s.dropna().astype(str).mode().iat[0] if not s.dropna().empty else ""))
+        else:
+            name_map = pd.Series([], dtype="object")
+
+        students_order = list(df[col_student].dropna().astype(str).unique())
+        for sid in students_order:
+            nm = (name_map[sid] if sid in name_map.index else "").strip()
+            label = f"{sid} — {nm}" if nm else str(sid)
+            student_lookup.append({"id": str(sid), "label": label, "name": nm})
+
+        # Per-student non-attendance by module/week
+        if att_mask is not None and col_module:
+            grp = df[att_mask].groupby([col_student, col_module]).size()
+            for (sid, mod), v in grp.items():
+                sid, mod = str(sid), str(mod)
+                ps_modules_att.setdefault(sid, {})[mod] = int(v)
+
+        if att_mask is not None and col_week:
+            grp = df[att_mask].groupby([col_student, col_week]).size()
+            for (sid, wk), v in grp.items():
+                sid, wk = str(sid), str(wk)
+                ps_weeks_att.setdefault(sid, {})[wk] = int(v)
+
+        # Risk by module (max severity seen per module for each student)
+        if col_risk and col_module:
+            ranks, labels = zip(*df[col_risk].map(_risk_rank_and_label))
+            df["_risk_rank"] = list(ranks)
+            df["_risk_label"] = list(labels)
+            grp = df.groupby([col_student, col_module])["_risk_rank"].max()
+            for (sid, mod), rank in grp.items():
+                sid, mod = str(sid), str(mod)
+                label = {3: "High", 2: "Medium", 1: "Low", 0: "Unknown"}.get(int(rank), "Unknown")
+                ps_risk_module_max.setdefault(sid, {})[mod] = label
+
+        # Week x risk counts per student (compact mapping)
+        if col_week and col_risk:
+            grp = df.groupby([col_student, col_week, col_risk]).size()
+            for (sid, wk, rk), v in grp.items():
+                sid, wk, rk = str(sid), str(wk), str(rk)
+                ps_week_risk_counts.setdefault(sid, {}).setdefault(wk, {})[rk] = int(v)
+
+        # Top students who miss class per module + global
+        if att_mask is not None:
+            if col_module:
+                grp = df[att_mask].groupby([col_module, col_student]).size()
+                for (mod, sid), v in grp.items():
+                    mod, sid = str(mod), str(sid)
+                    label = next((x["label"] for x in student_lookup if x["id"] == sid), sid)
+                    module_top_students_att.setdefault(mod, []).append({"id": sid, "label": label, "count": int(v)})
+                # sort each module list
+                for mod in list(module_top_students_att.keys()):
+                    module_top_students_att[mod].sort(key=lambda x: x["count"], reverse=True)
+                    # keep a reasonable number to avoid huge JSON
+                    module_top_students_att[mod] = module_top_students_att[mod][:100]
+
+            grp_global = df[att_mask].groupby(col_student).size().sort_values(ascending=False)
+            for sid, v in grp_global.items():
+                sid = str(sid)
+                label = next((x["label"] for x in student_lookup if x["id"] == sid), sid)
+                global_top_students_att.append({"id": sid, "label": label, "count": int(v)})
+            global_top_students_att = global_top_students_att[:200]
 
     # Repeats
     repeated_students = {}
@@ -176,6 +260,15 @@ def build_report(df: pd.DataFrame):
         "resolved_rate": resolved_rate,
         "repeated_students": repeated_students,
         "sample_rows": sample_rows,
+        # student analytics payload
+        "student_enabled": student_enabled,
+        "student_lookup": student_lookup,
+        "ps_modules_att": ps_modules_att,
+        "ps_weeks_att": ps_weeks_att,
+        "ps_risk_module_max": ps_risk_module_max,
+        "ps_week_risk_counts": ps_week_risk_counts,
+        "module_top_students_att": module_top_students_att,
+        "global_top_students_att": global_top_students_att,
     }
 
 def create_app():
