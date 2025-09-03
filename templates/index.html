@@ -55,6 +55,14 @@
         </div>
 
         <div class="filters__group">
+          <label for="qualFilter">Qualification</label>
+          <select id="qualFilter">
+            <option value="">All qualifications</option>
+            {% for q in report.qualifications %}<option value="{{ q }}">{{ q }}</option>{% endfor %}
+          </select>
+        </div>
+
+        <div class="filters__group">
           <label for="moduleScope">Modules</label>
           <select id="moduleScope" title="Pick how to show modules">
             <option value="all">All modules (all reasons)</option>
@@ -163,6 +171,14 @@
         </div>
 
         <div class="filters__group">
+          <label for="topQualSelect">Qualification</label>
+          <select id="topQualSelect">
+            <option value="">All qualifications</option>
+            {% for q in report.qualifications %}<option value="{{ q }}">{{ q }}</option>{% endfor %}
+          </select>
+        </div>
+
+        <div class="filters__group">
           <label for="topNStudent">Show</label>
           <select id="topNStudent">
             <option value="5">Top 5</option>
@@ -199,9 +215,7 @@
       </div>
       <div class="card" id="stuRiskModuleCard">
         <h3 class="card__title">Risk by module (max severity)</h3>
-        <div id="stuRiskModuleTable" class="table-wrapper">
-          <!-- JS injects a small table -->
-        </div>
+        <div id="stuRiskModuleTable" class="table-wrapper"></div>
       </div>
     </section>
     {% endif %}
