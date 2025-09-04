@@ -8,8 +8,17 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- Matrix chart plugin for heatmaps -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-matrix@2.0.2/dist/chartjs-chart-matrix.min.js"></script>
+
+  <!-- Tiny extras specific to heatmap/table so you don't have to touch style.css -->
+  <style>
+    .legend { display:flex; align-items:center; gap:.5rem; }
+    .legend__bar { height:10px; width:180px; border-radius:6px; background:linear-gradient(90deg, hsl(120 70% 45%), hsl(60 80% 50%), hsl(0 75% 50%)); }
+    .legend__bar--binary { background:linear-gradient(90deg, #fff, #fff 50%, #e74c3c); }
+    .heat-cell { text-align:center; font-weight:600; }
+    .heat-absent { background:#ffefef; color:#c0392b; }
+    .rate-chip { padding:2px 8px; border-radius:12px; font-weight:600; }
+  </style>
 </head>
 <body>
   <header class="topbar">
@@ -223,21 +232,37 @@
     {% endif %}
     <!-- ==================== end Student Analysis ==================== -->
 
-    <!-- ====================== NEW: Module Heatmap ====================== -->
+    <!-- ====================== Module Heatmap ====================== -->
     <section class="card">
-      <h3 class="card__title">Module heatmap (absence rate per student per week)</h3>
+      <div class="card__header">
+        <h3 class="card__title">Module heatmap (absence per student per week)</h3>
+      </div>
+
       <div class="filters">
         <div class="filters__group">
           <label for="heatModule">Module</label>
-          <select id="heatModule">
-            {% for m in report.modules %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
-          </select>
+          <select id="heatModule">{% for m in report.modules %}<option value="{{ m }}">{{ m }}</option>{% endfor %}</select>
         </div>
         <div class="filters__group">
           <label for="heatQual">Qualification</label>
           <select id="heatQual">
             <option value="">All qualifications</option>
             {% for q in report.qualifications %}<option value="{{ q }}">{{ q }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="filters__group">
+          <label for="heatMode">View</label>
+          <select id="heatMode">
+            <option value="binary" selected>Binary (0 = present, 1 = absent)</option>
+            <option value="rate">Rate (%)</option>
+          </select>
+        </div>
+        <div class="filters__group">
+          <label for="heatSort">Sort by</label>
+          <select id="heatSort">
+            <option value="total_desc" selected>Total absences (high → low)</option>
+            <option value="id_asc">Student ID (A → Z)</option>
+            <option value="name_asc">Name (A → Z)</option>
           </select>
         </div>
         <div class="filters__group">
@@ -250,16 +275,22 @@
           </select>
         </div>
         <div class="filters__group">
-          <button id="drawHeatmap" class="btn btn-outline">Draw heatmap</button>
+          <button id="drawHeatmap" class="btn btn-outline">Update</button>
+          <button id="downloadHeatCsv" class="btn btn-outline">Download CSV</button>
         </div>
       </div>
 
-      <div class="muted tiny" style="margin:6px 0 12px;">
-        Color shows absence rate for that student in that week (non-attendance / total flags). Darker = higher rate.
+      <div class="legend" id="heatLegend" style="margin-bottom:10px;">
+        <span class="tiny muted">Legend:</span>
+        <div class="legend__bar legend__bar--binary"></div>
+        <span class="tiny muted">0</span><span class="tiny muted">→</span><span class="tiny muted">1</span>
       </div>
 
-      <div class="chart" id="heatmapWrap">
-        <canvas id="moduleHeatmap"></canvas>
+      <div class="chart" id="heatmapWrap"><canvas id="moduleHeatmap"></canvas></div>
+
+      <div class="table-wrapper" style="margin-top:14px;">
+        <div class="muted tiny" style="margin-bottom:6px;">Table view (like your Excel) — includes Totals and Absence Rate (%).</div>
+        <div id="heatTableWrap"></div>
       </div>
     </section>
     <!-- ==================== end Module Heatmap ==================== -->
@@ -282,9 +313,7 @@
             </thead>
             <tbody>
               {% for row in report.repeated_students.preview_rows %}
-              <tr>
-                {% for h in headers %}<td>{{ row[h] }}</td>{% endfor %}
-              </tr>
+              <tr>{% for h in headers %}<td>{{ row[h] }}</td>{% endfor %}</tr>
               {% endfor %}
             </tbody>
           </table>
@@ -300,15 +329,11 @@
         <table>
           <thead>
             {% set sample_headers = report.sample_rows[0].keys() %}
-            <tr>
-              {% for h in sample_headers %}<th>{{ h }}</th>{% endfor %}
-            </tr>
+            <tr>{% for h in sample_headers %}<th>{{ h }}</th>{% endfor %}</tr>
           </thead>
           <tbody>
             {% for row in report.sample_rows %}
-            <tr>
-              {% for h in sample_headers %}<td>{{ row[h] }}</td>{% endfor %}
-            </tr>
+            <tr>{% for h in sample_headers %}<td>{{ row[h] }}</td>{% endfor %}</tr>
             {% endfor %}
           </tbody>
         </table>
