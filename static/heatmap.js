@@ -1,26 +1,26 @@
 /* Module heatmap (absence per student per week)
-   Safe to drop in without changing other parts of the app. */
+   Self-contained. Does not modify other parts of the app. */
 (function () {
   if (!window.__REPORT__) return;
 
-  // Bail out if the heatmap elements are not on the page
-  const needIds = [
+  // Required DOM nodes for the heatmap section
+  const ids = [
     "heatModule","heatQual","heatMode","heatSort","heatTopN",
     "heatLegend","heatmapWrap","moduleHeatmap","heatTableWrap",
     "downloadHeatCsv","drawHeatmap"
   ];
-  if (!needIds.every(id => document.getElementById(id))) return;
+  if (!ids.every(id => document.getElementById(id))) return;
 
   const report = window.__REPORT__;
 
-  // Local helpers (no dependency on your existing app.js)
-  const sortedWeeks = (keys) => {
-    const arr = (keys || []).map(String);
-    return arr
+  // ---------- Utilities ----------
+  const sortedWeeks = (keys) =>
+    (keys || [])
+      .map(String)
       .map(w => ({ w, n: (w.match(/\d+/) || [0])[0] * 1 }))
       .sort((a,b)=>a.n-b.n)
       .map(x=>x.w);
-  };
+
   function colorForRate(r) {
     if (r == null || isNaN(r)) return "rgba(0,0,0,0)";
     // 0 -> green (120), 1 -> red (0)
@@ -28,7 +28,7 @@
     return `hsl(${h} 70% 45%)`;
   }
 
-  // id -> name/qual maps for labels and filtering
+  // id -> name / qual maps (labels & filtering)
   const idToName = {};
   const idToQual = {};
   (report.student_lookup || []).forEach(s => {
@@ -46,7 +46,7 @@
     return sortedWeeks(weeks);
   }
 
-  // Build Excel-like rows with binary values, totals, and % rate
+  // Excel-style rows: 0/1 per week + totals + rate
   function buildHeatRows(mod, qual, sortKey = "total_desc") {
     const byMod = report.module_heatmap?.[mod] || {};
     const weeks = buildModuleWeeks(mod, qual);
@@ -57,12 +57,15 @@
       const wkMap = byMod[sid] || {};
       const weekVals = {};
       let total = 0;
+
       weeks.forEach(w => {
-        const entry = wkMap[w];           // [att_count, total_rows]
-        const bin = entry ? ((entry[0] || 0) > 0 ? 1 : 0) : 0; // absent if ≥1 flagged absence
+        // Each value is [absence_count, total_rows]
+        const entry = wkMap[w];
+        const bin = entry ? ((entry[0] || 0) > 0 ? 1 : 0) : 0; // absent if >=1 flagged
         weekVals[w] = bin;
         total += bin;
       });
+
       const rate = weeks.length ? total / weeks.length : 0;
       rows.push({
         sid,
@@ -81,7 +84,7 @@
     return { weeks, rows };
   }
 
-  function renderHeatLegend(mode) {
+  function renderLegend(mode) {
     const legend = document.getElementById("heatLegend");
     if (!legend) return;
     const bar =
@@ -97,7 +100,7 @@
     `;
   }
 
-  function renderHeatTable(mod, weeks, rows) {
+  function renderTable(mod, weeks, rows) {
     const host = document.getElementById("heatTableWrap");
     if (!host) return;
     if (!weeks.length || !rows.length) {
@@ -114,13 +117,9 @@
           : "text-align:center;font-weight:600;";
         return `<td style="${style}">${bin || ""}</td>`;
       }).join("");
-
       const chip = `<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-weight:700;color:#fff;background:${colorForRate(r.ratePct/100)}">${r.ratePct}%</span>`;
-
       return `<tr>
-        <td>${r.sid}</td>
-        <td>${r.name || ""}</td>
-        <td>${mod}</td>
+        <td>${r.sid}</td><td>${r.name || ""}</td><td>${mod}</td>
         ${tds}
         <td style="text-align:center;font-weight:700;">${r.total}</td>
         <td>${chip}</td>
@@ -163,7 +162,21 @@
     };
   }
 
-  function renderHeatmap() {
+  // Load matrix plugin if it isn't on the page yet
+  function ensureMatrixPlugin(cb) {
+    try {
+      const has =
+        (Chart.registry && Chart.registry.controllers && Chart.registry.controllers.get && Chart.registry.controllers.get("matrix")) ||
+        (Chart.controllers && Chart.controllers.matrix);
+      if (has) return cb();
+    } catch (_) {}
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/chartjs-chart-matrix@2.0.2/dist/chartjs-chart-matrix.min.js";
+    s.onload = cb;
+    document.head.appendChild(s);
+  }
+
+  function draw() {
     const modSel  = document.getElementById("heatModule");
     const qualSel = document.getElementById("heatQual");
     const modeSel = document.getElementById("heatMode");
@@ -178,19 +191,20 @@
     const sortBy = sortSel.value || "total_desc";
     const topN   = parseInt(topNSel.value || "20", 10) || 20;
 
+    // If the backend hasn't sent module_heatmap, show a clear note
     if (!report.module_heatmap || !report.module_heatmap[mod]) {
-      // Clear both views
       wrap.style.height = "260px";
       if (window.heatmapChart) { window.heatmapChart.destroy(); window.heatmapChart = null; }
       document.getElementById("heatTableWrap").innerHTML =
-        "<p style='opacity:.7;font-size:12px;'>No data for this module.</p>";
+        "<p style='opacity:.7;font-size:12px;'>No heatmap data for this module. (Backend must provide <code>module_heatmap</code>.)</p>";
+      renderLegend(mode);
       return;
     }
 
     const { weeks, rows } = buildHeatRows(mod, qual, sortBy);
     const chosen = rows.slice(0, topN);
 
-    // y-axis labels and data points
+    // y labels and points
     const yLabels = chosen.map(r => `${r.sid} — ${r.name}`.trim());
     const rowsCount = yLabels.length;
     const colsCount = weeks.length;
@@ -199,37 +213,38 @@
     chosen.forEach((r, y) => {
       weeks.forEach((w, x) => {
         const bin = r.weekVals[w] || 0;
-        const v = (mode === "binary") ? bin : (r.ratePct / 100); // rate = student's overall
+        const v = (mode === "binary") ? bin : (r.ratePct / 100);
         const color = (mode === "binary")
-          ? (bin ? "#e74c3c" : "rgba(255,255,255,0.08)") // show faint 0 so the grid is visible
+          ? (bin ? "#e74c3c" : "rgba(255,255,255,0.08)") // faint 0 so grid is visible
           : colorForRate(v);
         points.push({ x, y, v, bin, color });
       });
     });
 
-    // Dynamic height so long lists fit
+    // dynamic height
     const cellH = 24;
     const height = Math.max(260, Math.min(800, rowsCount * cellH + 80));
     wrap.style.height = height + "px";
 
-    // Cell width based on columns
+    // cell width based on columns
     const cellW = Math.max(18, Math.min(42, Math.floor(680 / Math.max(1, colsCount))));
 
-    renderHeatLegend(mode);
+    renderLegend(mode);
 
-    // Draw matrix (requires chartjs-chart-matrix plugin, which you already include)
     if (window.heatmapChart) { window.heatmapChart.destroy(); window.heatmapChart = null; }
     window.heatmapChart = new Chart(ctx, {
       type: "matrix",
-      data: { datasets: [{
-        label: (mode === "binary") ? "Absent (1=absent)" : "Absence rate",
-        data: points,
-        backgroundColor: (c) => c.raw?.color || "rgba(0,0,0,0)",
-        borderColor: "rgba(0,0,0,0.12)",
-        borderWidth: 1,
-        width: cellW,
-        height: cellH
-      }]},
+      data: {
+        datasets: [{
+          label: (mode === "binary") ? "Absent (1=absent)" : "Absence rate",
+          data: points,
+          backgroundColor: (c) => c.raw?.color || "rgba(0,0,0,0)",
+          borderColor: "rgba(0,0,0,0.12)",
+          borderWidth: 1,
+          width: cellW,
+          height: cellH
+        }]
+      },
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -257,16 +272,12 @@
       }
     });
 
-    // Table + CSV for the same selection
-    renderHeatTable(mod, weeks, chosen);
+    renderTable(mod, weeks, chosen);
     wireCsv(mod, weeks, chosen);
   }
 
-  document.getElementById("drawHeatmap").addEventListener("click", (e) => {
-    e.preventDefault();
-    renderHeatmap();
-  });
+  function redraw(e) { e && e.preventDefault(); ensureMatrixPlugin(draw); }
 
-  // First render on load
-  renderHeatmap();
+  document.getElementById("drawHeatmap").addEventListener("click", redraw);
+  ensureMatrixPlugin(draw); // first render
 })();
