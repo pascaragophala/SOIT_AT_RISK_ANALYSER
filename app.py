@@ -10,7 +10,7 @@ ALLOWED_EXTENSIONS = {"xlsx", "xls"}
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# ---------- JSON / helpers ----------
+# ---------- helpers ----------
 def _counts_to_json_safe(series: pd.Series) -> dict:
     safe = {}
     for k, v in series.items():
@@ -143,13 +143,11 @@ def build_report(df: pd.DataFrame):
             for (w, m), v in s_att.items():
                 by_week_module_att.setdefault(str(w), {})[str(m)] = int(v)
 
-    # ---------- NEW: Qualification slices ----------
+    # ---------- Qualification slices ----------
     by_module_all_by_qual = {}
     by_module_att_by_qual = {}
     by_week_module_all_by_qual = {}
     by_week_module_att_by_qual = {}
-    module_top_students_att_by_qual = {}
-    global_top_students_att_by_qual = {}
 
     if col_module and col_student:
         for q in quals:
@@ -161,25 +159,23 @@ def build_report(df: pd.DataFrame):
 
             # Overall, non-attendance only
             if att_mask is not None:
-                qdfa = qdf[att_mask.loc[qdf.index]]  # apply same mask on subset
+                qdfa = qdf[att_mask.loc[qdf.index]]
                 tmpa = qdfa.groupby(col_module)[col_student].nunique().sort_values(ascending=False)
                 by_module_att_by_qual[q] = {str(k): int(v) for k, v in tmpa.items()}
 
             # By week
             if col_week:
-                # all reasons
                 g = qdf.groupby([col_week, col_module])[col_student].nunique()
                 if not g.empty:
                     for (w, m), v in g.items():
                         by_week_module_all_by_qual.setdefault(q, {}).setdefault(str(w), {})[str(m)] = int(v)
-                # non-attendance
                 if att_mask is not None:
                     g2 = qdf[att_mask.loc[qdf.index]].groupby([col_week, col_module])[col_student].nunique()
                     if not g2.empty:
                         for (w, m), v in g2.items():
                             by_week_module_att_by_qual.setdefault(q, {}).setdefault(str(w), {})[str(m)] = int(v)
 
-    # Week x Risk pivot (for the line chart)
+    # Week x Risk pivot
     week_risk = {}
     if col_week and col_risk:
         pivot = df.pivot_table(
@@ -195,7 +191,7 @@ def build_report(df: pd.DataFrame):
             "series": [{"name": str(c), "data": _list_int(pivot[c].values)} for c in pivot.columns],
         }
 
-    # Resolved rate by week (percentage)
+    # Resolved rate by week (%)
     resolved_rate = {}
     if col_week and col_resolved:
         vals = df[col_resolved].astype(str).str.strip().str.lower()
@@ -215,11 +211,13 @@ def build_report(df: pd.DataFrame):
     ps_week_risk_counts = {}
     module_top_students_att = {}
     global_top_students_att = []
+    module_top_students_att_by_qual = {}
+    global_top_students_att_by_qual = {}
+
+    # Maps for name and qualification
+    name_map, qual_map = {}, {}
 
     if student_enabled:
-        # Build id -> name and id -> qual (mode)
-        name_map = {}
-        qual_map = {}
         tmp = df[[col_student, col_name, "_qual"]].dropna(subset=[col_student]).copy()
         tmp["_sid"] = tmp[col_student].apply(_sid)
 
@@ -234,14 +232,14 @@ def build_report(df: pd.DataFrame):
         ).astype(str)
         qual_map = ql_series.to_dict()
 
-        # Ordered IDs
+        # Ordered IDs and display labels
         students_order = pd.unique(df[col_student].dropna().apply(_sid)).tolist()
         for sid in students_order:
             nm = (name_map.get(sid, "") or "").strip()
             ql = (qual_map.get(sid, "") or "").strip()
-            label = f"{sid} — {nm}" if nm else sid
-            display = f"{label} — [{ql}]" if ql else label
-            student_lookup.append({"id": sid, "label": display, "name": nm, "qual": ql})
+            base = f"{sid} — {nm}" if nm else sid
+            label = f"{base} — [{ql}]" if ql else base
+            student_lookup.append({"id": sid, "label": label, "name": nm, "qual": ql})
 
         # Per-student non-attendance by module/week
         if att_mask is not None and col_module:
@@ -256,7 +254,7 @@ def build_report(df: pd.DataFrame):
                 sid = _sid(sid_raw); wk = str(wk)
                 ps_weeks_att.setdefault(sid, {})[wk] = int(v)
 
-        # Risk by module (max severity seen per module)
+        # Risk by module (max severity)
         if col_risk and col_module:
             ranks = []
             for rv in df[col_risk].tolist():
@@ -287,22 +285,22 @@ def build_report(df: pd.DataFrame):
                     sid = _sid(sid_raw); mod = str(mod)
                     nm = (name_map.get(sid, "") or "").strip()
                     ql = (qual_map.get(sid, "") or "").strip()
-                    label = f"{sid} — {nm}" if nm else sid
-                    display = f"{label} — [{ql}]" if ql else label
-                    module_top_students_att.setdefault(mod, []).append({"id": sid, "label": display, "count": int(v)})
+                    base = f"{sid} — {nm}" if nm else sid
+                    label = f"{base} — [{ql}]" if ql else base
+                    module_top_students_att.setdefault(mod, []).append({"id": sid, "label": label, "count": int(v)})
                 for mod in list(module_top_students_att.keys()):
                     module_top_students_att[mod].sort(key=lambda x: x["count"], reverse=True)
                     module_top_students_att[mod] = module_top_students_att[mod][:100]
 
                 # by qualification + module
-                grpq = df[att_mask].groupby([ "_qual", col_module, col_student ]).size()
+                grpq = df[att_mask].groupby(["_qual", col_module, col_student]).size()
                 for (ql, mod, sid_raw), v in grpq.items():
                     sid = _sid(sid_raw); mod = str(mod); ql = str(ql)
                     nm = (name_map.get(sid, "") or "").strip()
-                    label = f"{sid} — {nm}" if nm else sid
-                    display = f"{label} — [{ql}]" if ql else label
+                    base = f"{sid} — {nm}" if nm else sid
+                    label = f"{base} — [{ql}]" if ql else base
                     module_top_students_att_by_qual.setdefault(ql, {}).setdefault(mod, []).append(
-                        {"id": sid, "label": display, "count": int(v)}
+                        {"id": sid, "label": label, "count": int(v)}
                     )
                 for ql in list(module_top_students_att_by_qual.keys()):
                     for mod in list(module_top_students_att_by_qual[ql].keys()):
@@ -314,9 +312,9 @@ def build_report(df: pd.DataFrame):
                 sid = _sid(sid_raw)
                 nm = (name_map.get(sid, "") or "").strip()
                 ql = (qual_map.get(sid, "") or "").strip()
-                label = f"{sid} — {nm}" if nm else sid
-                display = f"{label} — [{ql}]" if ql else label
-                global_top_students_att.append({"id": sid, "label": display, "count": int(v)})
+                base = f"{sid} — {nm}" if nm else sid
+                label = f"{base} — [{ql}]" if ql else base
+                global_top_students_att.append({"id": sid, "label": label, "count": int(v)})
             global_top_students_att = global_top_students_att[:200]
 
             # global by qualification
@@ -324,12 +322,28 @@ def build_report(df: pd.DataFrame):
             for (ql, sid_raw), v in grp_gq.items():
                 sid = _sid(sid_raw); ql = str(ql)
                 nm = (name_map.get(sid, "") or "").strip()
-                label = f"{sid} — {nm}" if nm else sid
-                display = f"{label} — [{ql}]" if ql else label
-                global_top_students_att_by_qual.setdefault(ql, []).append({"id": sid, "label": display, "count": int(v)})
+                base = f"{sid} — {nm}" if nm else sid
+                label = f"{base} — [{ql}]" if ql else base
+                global_top_students_att_by_qual.setdefault(ql, []).append({"id": sid, "label": label, "count": int(v)})
             for ql in list(global_top_students_att_by_qual.keys()):
                 global_top_students_att_by_qual[ql].sort(key=lambda x: x["count"], reverse=True)
                 global_top_students_att_by_qual[ql] = global_top_students_att_by_qual[ql][:200]
+
+    # ---------- NEW: Module heatmap data (per module, per student, per week) ----------
+    module_heatmap = {}
+    if col_module and col_student and col_week:
+        # totals per (module, student, week)
+        totals = df.groupby([col_module, col_student, col_week]).size()
+        # non-attendance per (module, student, week)
+        if att_mask is not None:
+            att = df[att_mask].groupby([col_module, col_student, col_week]).size()
+        else:
+            att = pd.Series(dtype="int64")
+
+        for (mod, sid_raw, wk), tot in totals.items():
+            mod = str(mod); sid = _sid(sid_raw); wk = str(wk)
+            att_count = int(att.get((mod, sid_raw, wk), 0))
+            module_heatmap.setdefault(mod, {}).setdefault(sid, {})[wk] = [int(att_count), int(tot)]
 
     # Repeats
     repeated_students = {}
@@ -380,6 +394,8 @@ def build_report(df: pd.DataFrame):
         "global_top_students_att": global_top_students_att,
         "module_top_students_att_by_qual": module_top_students_att_by_qual,
         "global_top_students_att_by_qual": global_top_students_att_by_qual,
+        # heatmap payload
+        "module_heatmap": module_heatmap,
     }
 
 def create_app():
