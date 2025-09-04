@@ -8,6 +8,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Matrix chart plugin for heatmaps -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-matrix@2.0.2/dist/chartjs-chart-matrix.min.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -64,7 +66,7 @@
 
         <div class="filters__group">
           <label for="moduleScope">Modules</label>
-          <select id="moduleScope" title="Pick how to show modules">
+          <select id="moduleScope">
             <option value="all">All modules (all reasons)</option>
             <option value="top3_att">Top 3 (non-attendance)</option>
             <option value="top5_att">Top 5 (non-attendance)</option>
@@ -74,7 +76,7 @@
 
         <div class="filters__group">
           <label for="moduleBasis">Basis</label>
-          <select id="moduleBasis" title="Which data to use for the module chart">
+          <select id="moduleBasis">
             <option value="all">All reasons</option>
             <option value="attendance">Non-attendance only</option>
           </select>
@@ -220,6 +222,47 @@
     </section>
     {% endif %}
     <!-- ==================== end Student Analysis ==================== -->
+
+    <!-- ====================== NEW: Module Heatmap ====================== -->
+    <section class="card">
+      <h3 class="card__title">Module heatmap (absence rate per student per week)</h3>
+      <div class="filters">
+        <div class="filters__group">
+          <label for="heatModule">Module</label>
+          <select id="heatModule">
+            {% for m in report.modules %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="filters__group">
+          <label for="heatQual">Qualification</label>
+          <select id="heatQual">
+            <option value="">All qualifications</option>
+            {% for q in report.qualifications %}<option value="{{ q }}">{{ q }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="filters__group">
+          <label for="heatTopN">Rows</label>
+          <select id="heatTopN">
+            <option value="10">Top 10</option>
+            <option value="20" selected>Top 20</option>
+            <option value="50">Top 50</option>
+            <option value="100">Top 100</option>
+          </select>
+        </div>
+        <div class="filters__group">
+          <button id="drawHeatmap" class="btn btn-outline">Draw heatmap</button>
+        </div>
+      </div>
+
+      <div class="muted tiny" style="margin:6px 0 12px;">
+        Color shows absence rate for that student in that week (non-attendance / total flags). Darker = higher rate.
+      </div>
+
+      <div class="chart" id="heatmapWrap">
+        <canvas id="moduleHeatmap"></canvas>
+      </div>
+    </section>
+    <!-- ==================== end Module Heatmap ==================== -->
 
     {% if report.repeated_students and report.repeated_students.top_counts %}
     <section class="card">
