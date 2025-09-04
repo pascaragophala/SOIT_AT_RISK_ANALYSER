@@ -20,7 +20,7 @@
   Chart.defaults.font.family = '"Inter", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif';
   Chart.defaults.plugins.legend.labels.usePointStyle = true;
 
-  // Utilities
+  // Utils
   const hideCardByCanvas = (id) => { const c = document.getElementById(id); if (c) c.closest(".card").classList.add("hidden"); };
   const hideEl = (id) => { const e = document.getElementById(id); if (e) e.classList.add("hidden"); };
   const showEl = (id) => { const e = document.getElementById(id); if (e) e.classList.remove("hidden"); };
@@ -73,7 +73,7 @@
     });
   }
 
-  // ----- Static charts -----
+  // ----- Static charts (unchanged) -----
   let moduleChart, riskChart, reasonChart, resolvedChart, weekRiskChart, nonAttendanceChart, resolvedRateChart;
 
   if (report.risk_counts && Object.keys(report.risk_counts).length) {
@@ -124,11 +124,9 @@
 
   function getModuleCounts({ week = "", basis = "all", scope = "all", qual = "" }) {
     let dataMap = {};
-
     const isTop = scope.startsWith("top");
     const topN = scope === "top3_att" ? 3 : scope === "top5_att" ? 5 : scope === "top10_att" ? 10 : null;
 
-    // choose the right bucket
     if (basis === "attendance") {
       if (qual) {
         dataMap = week
@@ -161,19 +159,16 @@
     const wrap = document.getElementById("moduleChartWrap");
     const ctx  = document.getElementById("moduleChart");
     if (!wrap || !ctx) return;
-    const week  = weekSel?.value || "";
-    const scope = scopeSel?.value || "all";
-    const basis = basisSel?.value || "all";
-    const qual  = qualSel?.value || "";
-
-    const { labels, values } = getModuleCounts({ week, basis, scope, qual });
+    const { labels, values } = getModuleCounts({
+      week: weekSel?.value || "", basis: basisSel?.value || "all",
+      scope: scopeSel?.value || "all", qual: qualSel?.value || ""
+    });
     if (!labels.length) { hideCardByCanvas("moduleChart"); return; }
     setDynamicHeight(wrap, labels.length);
     moduleChart?.destroy();
     moduleChart = makeBar(ctx, labels, values, true);
   }
   renderModuleChart();
-
   applyBtn?.addEventListener("click", (e) => { e.preventDefault(); renderModuleChart(); });
   resetBtn?.addEventListener("click", (e) => {
     e.preventDefault();
@@ -184,7 +179,7 @@
     renderModuleChart();
   });
 
-  // ----- Student analysis (shows qualification + optional filter) -----
+  // ----- Student analysis (already in your app) -----
   if (report.student_enabled) {
     const studentSearch = document.getElementById("studentSearch");
     const topModuleSelect = document.getElementById("topModuleSelect");
@@ -195,7 +190,6 @@
     const topStudentList = document.getElementById("topStudentList");
     const studentSelectedNote = document.getElementById("studentSelectedNote");
 
-    // Maps
     const labelToId = {};
     const idToLabel = {};
     const idToQual  = {};
@@ -203,7 +197,6 @@
       labelToId[s.label] = s.id; idToLabel[s.id] = s.label; idToQual[s.id] = s.qual || "";
     });
 
-    // charts
     let stuModAttChart, stuWeekAttChart, stuWeekRiskChart;
 
     function renderTopList() {
@@ -223,7 +216,6 @@
       }
 
       if (!list.length) { topStudentList.innerHTML = "<em>No data for the selection.</em>"; return; }
-
       topStudentList.innerHTML = list.map(x =>
         `<button class="btn btn-outline" data-sid="${x.id}" data-label="${x.label}" style="margin:4px 6px 0 0;">${x.label} (${x.count})</button>`
       ).join("");
@@ -286,9 +278,149 @@
       }
     }
 
-    // init
     renderTopList();
     renderTopListBtn?.addEventListener("click", (e) => { e.preventDefault(); renderTopList(); });
     analyzeStudentBtn?.addEventListener("click", (e) => { e.preventDefault(); analyzeStudent(); });
   }
+
+  // ----- NEW: Module heatmap (absence rate per student per week) -----
+  let heatmapChart;
+
+  function colorForRate(r) {
+    if (r == null || isNaN(r)) return 'rgba(0,0,0,0)';
+    // 0 -> green (120), 1 -> red (0)
+    const h = Math.round((1 - Math.max(0, Math.min(1, r))) * 120);
+    return `hsl(${h} 70% 45%)`;
+  }
+
+  function renderHeatmap() {
+    const dataMap = report.module_heatmap || {};
+    const modSel = document.getElementById("heatModule");
+    const qualSel = document.getElementById("heatQual");
+    const topNSel = document.getElementById("heatTopN");
+    const wrap = document.getElementById("heatmapWrap");
+    const ctx  = document.getElementById("moduleHeatmap");
+
+    const mod = modSel?.value || "";
+    const qual = qualSel?.value || "";
+    const topN = parseInt(topNSel?.value || "20", 10) || 20;
+    const byMod = dataMap[mod] || {};
+
+    // Build id->label/qual maps from student_lookup
+    const idToLabel = {};
+    const idToQual  = {};
+    (report.student_lookup || []).forEach(s => { idToLabel[s.id] = s.label; idToQual[s.id] = s.qual || ""; });
+
+    // Filter students by qualification if chosen
+    let sids = Object.keys(byMod);
+    if (qual) sids = sids.filter(sid => (idToQual[sid] || "") === qual);
+
+    // Compute total non-attendance for sorting
+    const totals = sids.map(sid => {
+      const weeks = byMod[sid] || {};
+      let attSum = 0;
+      Object.values(weeks).forEach(([att, tot]) => { attSum += Number(att || 0); });
+      return { sid, attSum };
+    }).sort((a,b) => b.attSum - a.attSum)
+      .slice(0, topN);
+
+    const chosen = totals.map(t => t.sid);
+
+    // Weeks across chosen students
+    let weekSet = new Set();
+    chosen.forEach(sid => Object.keys(byMod[sid] || {}).forEach(w => weekSet.add(String(w))));
+    let weeks = Array.from(weekSet);
+    if (!weeks.length) {
+      // fall back to global weeks list if there’s nothing yet
+      weeks = report.weeks || [];
+    }
+    weeks = sortedWeeks(weeks);
+
+    // y labels
+    const yLabels = chosen.map(sid => idToLabel[sid] || sid);
+    const rows = yLabels.length;
+    const cols = weeks.length;
+
+    // Matrix points
+    const points = [];
+    chosen.forEach((sid, y) => {
+      const wkMap = byMod[sid] || {};
+      weeks.forEach((w, x) => {
+        const entry = wkMap[w];
+        if (!entry) return;        // no data -> empty cell
+        const [att, tot] = entry;
+        if (!tot) return;
+        const rate = att / tot;
+        points.push({
+          x, y, v: rate,
+          att: Number(att || 0), tot: Number(tot || 0),
+          sid, week: w
+        });
+      });
+    });
+
+    // Dynamic height: 24px per row
+    const cellH = 24;
+    const height = Math.max(260, Math.min(800, rows * cellH + 80));
+    wrap.style.setProperty("--h", height + "px");
+
+    // Cell width based on columns
+    const cellW = Math.max(18, Math.min(42, Math.floor(680 / Math.max(1, cols))));
+
+    heatmapChart?.destroy();
+    heatmapChart = new Chart(ctx, {
+      type: 'matrix',
+      data: {
+        datasets: [{
+          label: 'Absence rate',
+          data: points,
+          backgroundColor: ctx => colorForRate(ctx.raw?.v),
+          borderColor: 'rgba(0,0,0,0.15)',
+          borderWidth: 1,
+          width: cellW,
+          height: cellH,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (tip) => {
+                const d = tip.raw;
+                const pct = (d.v * 100).toFixed(0) + "%";
+                return `${yLabels[d.y]} — W${weeks[d.x]}: ${pct} (${d.att}/${d.tot})`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            type: 'linear', position: 'top',
+            min: -0.5, max: cols - 0.5, ticks: {
+              stepSize: 1, callback: v => weeks[v] ?? ''
+            },
+            grid: { display: false }
+          },
+          y: {
+            type: 'linear',
+            min: -0.5, max: rows - 0.5, ticks: {
+              stepSize: 1, callback: v => yLabels[v] ?? ''
+            },
+            grid: { display: false }
+          }
+        }
+      }
+    });
+  }
+
+  // Hook up heatmap button
+  document.getElementById("drawHeatmap")?.addEventListener("click", (e) => {
+    e.preventDefault(); renderHeatmap();
+  });
+
+  // Draw on load (uses first module)
+  renderHeatmap();
 })();
