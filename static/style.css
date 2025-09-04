@@ -121,3 +121,36 @@ tbody tr:nth-child(odd) { background: color-mix(in hsl, var(--panel) 94%, #fffff
 
 /* Remove global canvas auto-height (prevents giant charts) */
 canvas { display: block; max-width: 100%; }
+
+/* === Heatmap styles (NEW) =========================================== */
+#heatmapWrap { position: relative; height: var(--h, 300px); }
+
+/* Legend */
+.legend { display: inline-flex; align-items: center; gap: .5rem; }
+.legend__bar {
+  height: 10px; width: 180px; border-radius: 6px;
+  border: 1px solid var(--border);
+  background: linear-gradient(90deg, hsl(120 70% 45%), hsl(60 80% 50%), hsl(0 75% 50%));
+}
+.legend__bar--binary {
+  background: linear-gradient(90deg, #ffffff, #ffffff 50%, #e74c3c);
+}
+
+/* Heat cells + rate chip */
+.heat-cell { text-align: center; font-weight: 600; border-radius: 4px; }
+.heat-absent { background: #ffefef; color: #c0392b; }
+.rate-chip { display: inline-block; padding: 2px 8px; border-radius: 12px; font-weight: 700; color: #fff; }
+
+/* Table under the heatmap */
+#heatTableWrap table { width: 100%; border-collapse: collapse; font-size: 14px; }
+#heatTableWrap th, #heatTableWrap td {
+  padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+#heatTableWrap th {
+  position: sticky; top: 0; z-index: 1; background: var(--panel-2);
+  text-align: left; font-weight: 700;
+}
+
+/* Top-students chips helper (if you use it near the heatmap) */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
