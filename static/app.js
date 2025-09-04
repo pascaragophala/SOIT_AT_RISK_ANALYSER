@@ -324,7 +324,54 @@
       idToName[s.id] = s.name || "";
     });
 
-    let stuModAttChart, stuWeekAttChart, stuWeekRiskChart;
+    // --- fallback builder from heatmap/ps data if server lists are missing
+    function computeFallbackTopList(mod, qual, n) {
+      const list = [];
+      const add = (sid, cnt) => {
+        const nm = (idToName[sid] || "").trim();
+        const ql = (idToQual[sid] || "").trim();
+        const base = nm ? `${sid} — ${nm}` : sid;
+        const label = ql ? `${base} — [${ql}]` : base;
+        list.push({ id: sid, label, count: cnt });
+      };
+
+      const counts = new Map();
+
+      // Prefer module_heatmap (sum weeks with absence)
+      if (mod) {
+        const byMod = report.module_heatmap?.[mod] || {};
+        Object.keys(byMod).forEach((sid) => {
+          if (qual && (idToQual[sid] || "") !== qual) return;
+          const wkMap = byMod[sid] || {};
+          let c = 0;
+          Object.values(wkMap).forEach((arr) => {
+            const bin = arr ? ((arr[0] || 0) > 0 ? 1 : 0) : 0;
+            c += bin;
+          });
+          if (c > 0) counts.set(sid, (counts.get(sid) || 0) + c);
+        });
+      }
+
+      // If still empty, use ps_modules_att (non-attendance counts per student per module)
+      if (!counts.size && report.ps_modules_att) {
+        Object.entries(report.ps_modules_att).forEach(([sid, m]) => {
+          if (qual && (idToQual[sid] || "") !== qual) return;
+          if (mod && m[mod]) counts.set(sid, (counts.get(sid) || 0) + Number(m[mod] || 0));
+          if (!mod) {
+            const total = Object.values(m).reduce((a, b) => a + (Number(b) || 0), 0);
+            if (total > 0) counts.set(sid, (counts.get(sid) || 0) + total);
+          }
+        });
+      }
+
+      // Build list
+      Array.from(counts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, n)
+        .forEach(([sid, cnt]) => add(sid, cnt));
+
+      return list;
+    }
 
     function renderTopList() {
       const mod = topModuleSelect?.value || "";
@@ -340,6 +387,11 @@
         list = report.global_top_students_att_by_qual[qual].slice(0, n);
       } else if (report.global_top_students_att) {
         list = report.global_top_students_att.slice(0, n);
+      }
+
+      // Fallback if above arrays are empty or missing
+      if (!list || list.length === 0) {
+        list = computeFallbackTopList(mod, qual, n);
       }
 
       if (!list.length) {
@@ -360,6 +412,8 @@
         });
       });
     }
+
+    let stuModAttChart, stuWeekAttChart, stuWeekRiskChart;
 
     function analyzeStudent(sid) {
       if (!sid) {
@@ -462,10 +516,27 @@
     });
   }
 
-  // ===================== MODULE HEATMAP =====================
-  let heatmapChart;
+  // ===================== MODULE HEATMAP (in this file) =====================
 
-  // id → name / qual maps for table labels and filters
+  // Load matrix plugin if needed
+  function ensureMatrixPlugin(cb) {
+    try {
+      const has =
+        (Chart.registry &&
+          Chart.registry.controllers &&
+          Chart.registry.controllers.get &&
+          Chart.registry.controllers.get("matrix")) ||
+        (Chart.controllers && Chart.controllers.matrix);
+      if (has) return cb();
+    } catch (_) {}
+    const s = document.createElement("script");
+    s.src =
+      "https://cdn.jsdelivr.net/npm/chartjs-chart-matrix@2.0.2/dist/chartjs-chart-matrix.min.js";
+    s.onload = cb;
+    document.head.appendChild(s);
+  }
+
+  // id → name / qual for labels/filters
   const idToName = {};
   const idToQual = {};
   (report.student_lookup || []).forEach((s) => {
@@ -475,7 +546,6 @@
 
   function colorForRate(r) {
     if (r == null || isNaN(r)) return "rgba(0,0,0,0)";
-    // 0 -> green (120), 1 -> red (0)
     const h = Math.round((1 - Math.max(0, Math.min(1, r))) * 120);
     return `hsl(${h} 70% 45%)`;
   }
@@ -492,7 +562,7 @@
     return sortedWeeks(weeks);
   }
 
-  // Build rows like Excel: binary per week, plus totals/rate
+  // Build Excel-like rows
   function buildHeatRows(mod, qual, sortKey = "total_desc") {
     const byMod = report.module_heatmap?.[mod] || {};
     const weeks = buildModuleWeeks(mod, qual);
@@ -505,8 +575,7 @@
       let total = 0;
 
       weeks.forEach((w) => {
-        const entry = wkMap[w];
-        // absent if there’s >=1 absence flag in that week for this module+student
+        const entry = wkMap[w]; // [absence_count, total_rows]
         const bin = entry ? ((entry[0] || 0) > 0 ? 1 : 0) : 0;
         weekVals[w] = bin;
         total += bin;
@@ -545,7 +614,25 @@
         : `<span class="tiny muted">Legend:</span><div class="legend__bar"></div><span class="tiny muted">0%</span><span class="tiny muted">→</span><span class="tiny muted">100%</span>`;
   }
 
+  let heatmapChart;
+
   function renderHeatmap() {
+    // Run only if the section exists
+    const ids = [
+      "heatModule",
+      "heatQual",
+      "heatMode",
+      "heatSort",
+      "heatTopN",
+      "heatLegend",
+      "heatmapWrap",
+      "moduleHeatmap",
+      "heatTableWrap",
+      "downloadHeatCsv",
+      "drawHeatmap",
+    ];
+    if (!ids.every((id) => document.getElementById(id))) return;
+
     const modSel = document.getElementById("heatModule");
     const qualSel = document.getElementById("heatQual");
     const modeSel = document.getElementById("heatMode");
@@ -560,6 +647,19 @@
     const sortKey = sortSel?.value || "total_desc";
     const topN = parseInt(topNSel?.value || "20", 10) || 20;
 
+    // No backend data? Show a clear note
+    if (!report.module_heatmap || !report.module_heatmap[mod]) {
+      wrap.style.setProperty("--h", "260px");
+      if (heatmapChart) {
+        heatmapChart.destroy();
+        heatmapChart = null;
+      }
+      document.getElementById("heatTableWrap").innerHTML =
+        "<p class='muted tiny'>No heatmap data for this module.</p>";
+      renderHeatLegend(mode);
+      return;
+    }
+
     const { weeks, rows } = buildHeatRows(mod, qual, sortKey);
     const chosen = rows.slice(0, topN);
 
@@ -573,14 +673,14 @@
     chosen.forEach((r, y) => {
       weeks.forEach((w, x) => {
         const bin = r.weekVals[w] || 0;
-        const v = mode === "binary" ? bin : r.ratePct / 100; // rate uses student’s overall rate
+        const v = mode === "binary" ? bin : r.ratePct / 100; // rate uses student's overall rate
         const color =
           mode === "binary"
             ? bin
               ? "#e74c3c" // absent
-              : "rgba(255,255,255,0.08)" // present → faint cell so grid is visible
+              : "rgba(255,255,255,0.08)" // present → faint cell so grid visible
             : colorForRate(v);
-        points.push({ x, y, v, bin, sid: r.sid, week: w, color });
+        points.push({ x, y, v, bin, week: w, color });
       });
     });
 
@@ -620,12 +720,12 @@
               label: (tip) => {
                 const d = tip.raw;
                 if (mode === "binary") {
-                  return `${yLabels[d.y]} — W${weeks[d.x]}: ${
+                  return `${yLabels[d.y]} — ${weeks[d.x]}: ${
                     d.bin === 1 ? "Absent (1)" : "Present (0)"
                   }`;
                 } else {
                   const pct = Math.round(d.v * 100);
-                  return `${yLabels[d.y]} — W${weeks[d.x]}: ${pct}% overall absence rate`;
+                  return `${yLabels[d.y]} — ${weeks[d.x]}: ${pct}% overall absence rate`;
                 }
               },
             },
@@ -671,7 +771,9 @@
         const tds = weeks
           .map((w) => {
             const bin = r.weekVals[w] || 0;
-            return `<td class="heat-cell ${bin ? "heat-absent" : ""}">${bin || ""}</td>`;
+            return `<td class="heat-cell ${bin ? "heat-absent" : ""}">${
+              bin || ""
+            }</td>`;
           })
           .join("");
 
@@ -744,10 +846,10 @@
     };
   }
 
-  // Hook up heatmap button and draw once
+  // Hook button and first render (load plugin if needed)
   document.getElementById("drawHeatmap")?.addEventListener("click", (e) => {
     e.preventDefault();
-    renderHeatmap();
+    ensureMatrixPlugin(renderHeatmap);
   });
-  renderHeatmap();
+  ensureMatrixPlugin(renderHeatmap);
 })();
