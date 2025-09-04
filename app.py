@@ -10,7 +10,7 @@ ALLOWED_EXTENSIONS = {"xlsx", "xls"}
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# ---------- helpers ----------
+# ---------- JSON / helpers ----------
 def _counts_to_json_safe(series: pd.Series) -> dict:
     safe = {}
     for k, v in series.items():
@@ -23,12 +23,13 @@ def _list_int(values) -> list:
 
 def _sort_weeks_like(weeks: pd.Series) -> list:
     try:
-        nums = pd.Series(weeks).astype(str).str.extract(r"(\d+)", expand=False).fillna("0").astype(int)
-        return [w for _, w in sorted(zip(nums, pd.Series(weeks).astype(str)))]
+        nums = weeks.astype(str).str.extract(r"(\d+)", expand=False).fillna("0").astype(int)
+        return [w for _, w in sorted(zip(nums, weeks.astype(str)))]
     except Exception:
-        return list(pd.Series(weeks).astype(str))
+        return list(weeks.astype(str))
 
 def _sid(x) -> str:
+    """Normalize student ID to a clean string (strip trailing .0 etc)."""
     try:
         if pd.isna(x):
             return ""
@@ -43,56 +44,23 @@ def _sid(x) -> str:
     return s
 
 def _canon_qual(x: str) -> str:
+    """Merge BBIS~BBIS-B, BITW~BITW-B, HCS~HCS-B. Otherwise keep uppercased token."""
     if x is None or (isinstance(x, float) and pd.isna(x)):
         return "Unknown"
     s = str(x).strip().upper()
-    if s in {"BBIS", "BBIS-B"}: return "BBIS"
-    if s in {"BITW", "BITW-B"}: return "BITW"
-    if s in {"HCS", "HCS-B"}:   return "HCS"
+    if s in {"BBIS", "BBIS-B"}:
+        return "BBIS"
+    if s in {"BITW", "BITW-B"}:
+        return "BITW"
+    if s in {"HCS", "HCS-B"}:
+        return "HCS"
     return s if s else "Unknown"
-
-def _compute_absence_mask(df: pd.DataFrame) -> pd.Series:
-    """
-    Robust detector for non-attendance.
-    Looks across *any* column whose name or values hint at absence/attendance.
-    Works with text (e.g., 'Non-attendance', 'Did not attend') and numeric 0/1 or Yes/No.
-    """
-    idx = df.index
-    mask = pd.Series(False, index=idx)
-
-    # Columns that are likely to carry the signal
-    candidate_cols = []
-    for c in df.columns:
-        cl = str(c).lower()
-        if any(k in cl for k in ["reason", "attendance", "attend", "absent", "absence", "miss"]):
-            candidate_cols.append(c)
-
-    # If nothing matched by name, still scan everything (some files put the signal in a generic column)
-    if not candidate_cols:
-        candidate_cols = list(df.columns)
-
-    # Patterns
-    txt_pat = re.compile(r"(non[\s-]*attendance|did\s*not\s*attend|no\s*show|miss(ed)?\s*class|absen[ct]|not\s*attend)", re.I)
-
-    for c in candidate_cols:
-        s = df[c]
-        # numeric → treat >0 as absence
-        if pd.api.types.is_numeric_dtype(s):
-            mask = mask | (pd.to_numeric(s, errors="coerce").fillna(0) > 0)
-            continue
-
-        # text / mixed
-        st = s.astype(str).str.strip().str.lower()
-        mask = mask | st.str.contains(txt_pat, na=False)
-        mask = mask | st.isin({"1", "y", "yes", "true"})
-
-    return mask
 
 def build_report(df: pd.DataFrame):
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Likely columns
+    # Likely column names
     col_student = next((c for c in df.columns if c.lower().startswith("student number")), None)
     col_name    = next((c for c in df.columns if c.lower().startswith("student name")), None)
     col_module  = next((c for c in df.columns if c.lower().startswith("module")), None)
@@ -104,7 +72,7 @@ def build_report(df: pd.DataFrame):
     col_qual    = next((c for c in df.columns if ("qual" in c.lower() or "program" in c.lower() or
                                                   "programme" in c.lower() or "course" in c.lower())), None)
 
-    # Normalize
+    # Normalize types
     if col_week and df[col_week].notna().any():
         df[col_week] = df[col_week].astype(str)
     if col_year and df[col_year].notna().any():
@@ -114,13 +82,15 @@ def build_report(df: pd.DataFrame):
     else:
         df["_qual"] = "Unknown"
 
-    total_records   = int(len(df))
+    total_records = int(len(df))
     unique_students = int(df[col_student].nunique()) if col_student else None
 
+    # Global counts
     risk_counts     = _counts_to_json_safe(df[col_risk].value_counts(dropna=False)) if col_risk else {}
     resolved_counts = _counts_to_json_safe(df[col_resolved].value_counts(dropna=False)) if col_resolved else {}
     by_reason       = _counts_to_json_safe(df[col_reason].value_counts().head(15)) if col_reason else {}
 
+    # Weeks, modules, qualifications
     weeks   = _sort_weeks_like(df[col_week].dropna().unique()) if col_week else []
     modules = sorted(df[col_module].dropna().astype(str).unique()) if col_module else []
     quals   = sorted(pd.unique(df["_qual"]).tolist())
@@ -128,11 +98,18 @@ def build_report(df: pd.DataFrame):
     # Unique students by module (overall)
     by_module = {}
     if col_module and col_student:
-        tmp = df.groupby(col_module)[col_student].nunique().sort_values(ascending=False)
+        tmp = (
+            df.groupby(col_module)[col_student]
+            .nunique()
+            .sort_values(ascending=False)
+        )
         by_module = {str(k): int(v) for k, v in tmp.items()}
 
-    # ---------- Robust non-attendance mask ----------
-    att_mask = _compute_absence_mask(df)
+    # Non-attendance detector (tolerant)
+    att_mask = None
+    if col_reason:
+        att_regex = r"(absent|attendance|attend|no\s*show|did\s*not\s*attend|not\s*attend|missed\s*class|no\s*class\s*attendance)"
+        att_mask = df[col_reason].astype(str).str.contains(att_regex, flags=re.IGNORECASE, regex=True, na=False)
 
     # Non-attendance counts
     by_module_att = {}
@@ -143,55 +120,66 @@ def build_report(df: pd.DataFrame):
     def _count(series_groupby):
         return series_groupby.nunique() if col_student else series_groupby.size()
 
-    if col_module and col_student:
+    if col_module and col_student and att_mask is not None:
         tmp_att = _count(df[att_mask].groupby(col_module)[col_student]).sort_values(ascending=False)
         by_module_att = {str(k): int(v) for k, v in tmp_att.items()}
 
-    if col_week:
+    if col_week and att_mask is not None:
         base = df[att_mask]
         key = col_student if col_student else df.columns[0]
         tmp_week_att = base.groupby(col_week)[key].nunique() if col_student else base.groupby(col_week).size()
         by_week_att = {str(k): int(v) for k, v in tmp_week_att.items()}
 
     if col_week and col_module:
+        # All reasons, by week x module
         g_all = df.groupby([col_week, col_module])
         s_all = _count(g_all[col_student] if col_student else g_all.size())
         for (w, m), v in s_all.items():
             by_week_module_all.setdefault(str(w), {})[str(m)] = int(v)
 
-        g_att = df[att_mask].groupby([col_week, col_module])
-        s_att = _count(g_att[col_student] if col_student else g_att.size())
-        for (w, m), v in s_att.items():
-            by_week_module_att.setdefault(str(w), {})[str(m)] = int(v)
+        if att_mask is not None:
+            g_att = df[att_mask].groupby([col_week, col_module])
+            s_att = _count(g_att[col_student] if col_student else g_att.size())
+            for (w, m), v in s_att.items():
+                by_week_module_att.setdefault(str(w), {})[str(m)] = int(v)
 
-    # ---------- Qualification slices ----------
+    # ---------- NEW: Qualification slices ----------
     by_module_all_by_qual = {}
     by_module_att_by_qual = {}
     by_week_module_all_by_qual = {}
     by_week_module_att_by_qual = {}
+    module_top_students_att_by_qual = {}
+    global_top_students_att_by_qual = {}
 
     if col_module and col_student:
         for q in quals:
             qdf = df[df["_qual"] == q]
+
+            # Overall, all reasons
             tmp = qdf.groupby(col_module)[col_student].nunique().sort_values(ascending=False)
             by_module_all_by_qual[q] = {str(k): int(v) for k, v in tmp.items()}
 
-            qdfa = qdf[att_mask.loc[qdf.index]]
-            tmpa = qdfa.groupby(col_module)[col_student].nunique().sort_values(ascending=False)
-            by_module_att_by_qual[q] = {str(k): int(v) for k, v in tmpa.items()}
+            # Overall, non-attendance only
+            if att_mask is not None:
+                qdfa = qdf[att_mask.loc[qdf.index]]  # apply same mask on subset
+                tmpa = qdfa.groupby(col_module)[col_student].nunique().sort_values(ascending=False)
+                by_module_att_by_qual[q] = {str(k): int(v) for k, v in tmpa.items()}
 
+            # By week
             if col_week:
+                # all reasons
                 g = qdf.groupby([col_week, col_module])[col_student].nunique()
                 if not g.empty:
                     for (w, m), v in g.items():
                         by_week_module_all_by_qual.setdefault(q, {}).setdefault(str(w), {})[str(m)] = int(v)
+                # non-attendance
+                if att_mask is not None:
+                    g2 = qdf[att_mask.loc[qdf.index]].groupby([col_week, col_module])[col_student].nunique()
+                    if not g2.empty:
+                        for (w, m), v in g2.items():
+                            by_week_module_att_by_qual.setdefault(q, {}).setdefault(str(w), {})[str(m)] = int(v)
 
-                g2 = qdf[att_mask.loc[qdf.index]].groupby([col_week, col_module])[col_student].nunique()
-                if not g2.empty:
-                    for (w, m), v in g2.items():
-                        by_week_module_att_by_qual.setdefault(q, {}).setdefault(str(w), {})[str(m)] = int(v)
-
-    # Week x Risk pivot
+    # Week x Risk pivot (for the line chart)
     week_risk = {}
     if col_week and col_risk:
         pivot = df.pivot_table(
@@ -207,7 +195,7 @@ def build_report(df: pd.DataFrame):
             "series": [{"name": str(c), "data": _list_int(pivot[c].values)} for c in pivot.columns],
         }
 
-    # Resolved rate by week (%)
+    # Resolved rate by week (percentage)
     resolved_rate = {}
     if col_week and col_resolved:
         vals = df[col_resolved].astype(str).str.strip().str.lower()
@@ -218,7 +206,7 @@ def build_report(df: pd.DataFrame):
         for w in totals.index:
             resolved_rate[str(w)] = round((int(trues.loc[w]) / int(totals.loc[w])) * 100, 1) if int(totals.loc[w]) else 0.0
 
-    # ---------- Student analytics ----------
+    # ---------- Student analytics (with qualification) ----------
     student_enabled = bool(col_student)
     student_lookup = []
     ps_modules_att = {}
@@ -227,11 +215,11 @@ def build_report(df: pd.DataFrame):
     ps_week_risk_counts = {}
     module_top_students_att = {}
     global_top_students_att = []
-    module_top_students_att_by_qual = {}
-    global_top_students_att_by_qual = {}
 
-    name_map, qual_map = {}, {}
     if student_enabled:
+        # Build id -> name and id -> qual (mode)
+        name_map = {}
+        qual_map = {}
         tmp = df[[col_student, col_name, "_qual"]].dropna(subset=[col_student]).copy()
         tmp["_sid"] = tmp[col_student].apply(_sid)
 
@@ -246,26 +234,29 @@ def build_report(df: pd.DataFrame):
         ).astype(str)
         qual_map = ql_series.to_dict()
 
+        # Ordered IDs
         students_order = pd.unique(df[col_student].dropna().apply(_sid)).tolist()
         for sid in students_order:
             nm = (name_map.get(sid, "") or "").strip()
             ql = (qual_map.get(sid, "") or "").strip()
-            base = f"{sid} — {nm}" if nm else sid
-            label = f"{base} — [{ql}]" if ql else base
-            student_lookup.append({"id": sid, "label": label, "name": nm, "qual": ql})
+            label = f"{sid} — {nm}" if nm else sid
+            display = f"{label} — [{ql}]" if ql else label
+            student_lookup.append({"id": sid, "label": display, "name": nm, "qual": ql})
 
-        if col_module:
+        # Per-student non-attendance by module/week
+        if att_mask is not None and col_module:
             grp = df[att_mask].groupby([col_student, col_module]).size()
             for (sid_raw, mod), v in grp.items():
                 sid = _sid(sid_raw); mod = str(mod)
                 ps_modules_att.setdefault(sid, {})[mod] = int(v)
 
-        if col_week:
+        if att_mask is not None and col_week:
             grp = df[att_mask].groupby([col_student, col_week]).size()
             for (sid_raw, wk), v in grp.items():
                 sid = _sid(sid_raw); wk = str(wk)
                 ps_weeks_att.setdefault(sid, {})[wk] = int(v)
 
+        # Risk by module (max severity seen per module)
         if col_risk and col_module:
             ranks = []
             for rv in df[col_risk].tolist():
@@ -281,70 +272,64 @@ def build_report(df: pd.DataFrame):
                 label = {3: "High", 2: "Medium", 1: "Low", 0: "Unknown"}.get(int(rank), "Unknown")
                 ps_risk_module_max.setdefault(sid, {})[mod] = label
 
+        # Week x risk counts per student
         if col_week and col_risk:
             grp = df.groupby([col_student, col_week, col_risk]).size()
             for (sid_raw, wk, rk), v in grp.items():
                 sid = _sid(sid_raw); wk = str(wk); rk = str(rk)
                 ps_week_risk_counts.setdefault(sid, {}).setdefault(wk, {})[rk] = int(v)
 
-        if col_module:
-            grp = df[att_mask].groupby([col_module, col_student]).size()
-            for (mod, sid_raw), v in grp.items():
-                sid = _sid(sid_raw); mod = str(mod)
+        # Top students who miss class
+        if att_mask is not None:
+            if col_module:
+                grp = df[att_mask].groupby([col_module, col_student]).size()
+                for (mod, sid_raw), v in grp.items():
+                    sid = _sid(sid_raw); mod = str(mod)
+                    nm = (name_map.get(sid, "") or "").strip()
+                    ql = (qual_map.get(sid, "") or "").strip()
+                    label = f"{sid} — {nm}" if nm else sid
+                    display = f"{label} — [{ql}]" if ql else label
+                    module_top_students_att.setdefault(mod, []).append({"id": sid, "label": display, "count": int(v)})
+                for mod in list(module_top_students_att.keys()):
+                    module_top_students_att[mod].sort(key=lambda x: x["count"], reverse=True)
+                    module_top_students_att[mod] = module_top_students_att[mod][:100]
+
+                # by qualification + module
+                grpq = df[att_mask].groupby([ "_qual", col_module, col_student ]).size()
+                for (ql, mod, sid_raw), v in grpq.items():
+                    sid = _sid(sid_raw); mod = str(mod); ql = str(ql)
+                    nm = (name_map.get(sid, "") or "").strip()
+                    label = f"{sid} — {nm}" if nm else sid
+                    display = f"{label} — [{ql}]" if ql else label
+                    module_top_students_att_by_qual.setdefault(ql, {}).setdefault(mod, []).append(
+                        {"id": sid, "label": display, "count": int(v)}
+                    )
+                for ql in list(module_top_students_att_by_qual.keys()):
+                    for mod in list(module_top_students_att_by_qual[ql].keys()):
+                        module_top_students_att_by_qual[ql][mod].sort(key=lambda x: x["count"], reverse=True)
+                        module_top_students_att_by_qual[ql][mod] = module_top_students_att_by_qual[ql][mod][:100]
+
+            grp_global = df[att_mask].groupby(col_student).size().sort_values(ascending=False)
+            for sid_raw, v in grp_global.items():
+                sid = _sid(sid_raw)
                 nm = (name_map.get(sid, "") or "").strip()
                 ql = (qual_map.get(sid, "") or "").strip()
-                base = f"{sid} — {nm}" if nm else sid
-                label = f"{base} — [{ql}]" if ql else base
-                module_top_students_att.setdefault(mod, []).append({"id": sid, "label": label, "count": int(v)})
-            for mod in list(module_top_students_att.keys()):
-                module_top_students_att[mod].sort(key=lambda x: x["count"], reverse=True)
-                module_top_students_att[mod] = module_top_students_att[mod][:100]
+                label = f"{sid} — {nm}" if nm else sid
+                display = f"{label} — [{ql}]" if ql else label
+                global_top_students_att.append({"id": sid, "label": display, "count": int(v)})
+            global_top_students_att = global_top_students_att[:200]
 
-            grpq = df[att_mask].groupby(["_qual", col_module, col_student]).size()
-            for (ql, mod, sid_raw), v in grpq.items():
-                sid = _sid(sid_raw); mod = str(mod); ql = str(ql)
+            # global by qualification
+            grp_gq = df[att_mask].groupby(["_qual", col_student]).size()
+            for (ql, sid_raw), v in grp_gq.items():
+                sid = _sid(sid_raw); ql = str(ql)
                 nm = (name_map.get(sid, "") or "").strip()
-                base = f"{sid} — {nm}" if nm else sid
-                label = f"{base} — [{ql}]" if ql else base
-                module_top_students_att_by_qual.setdefault(ql, {}).setdefault(mod, []).append(
-                    {"id": sid, "label": label, "count": int(v)}
-                )
-            for ql in list(module_top_students_att_by_qual.keys()):
-                for mod in list(module_top_students_att_by_qual[ql].keys()):
-                    module_top_students_att_by_qual[ql][mod].sort(key=lambda x: x["count"], reverse=True)
-                    module_top_students_att_by_qual[ql][mod] = module_top_students_att_by_qual[ql][mod][:100]
-
-        grp_global = df[att_mask].groupby(col_student).size().sort_values(ascending=False)
-        for sid_raw, v in grp_global.items():
-            sid = _sid(sid_raw)
-            nm = (name_map.get(sid, "") or "").strip()
-            ql = (qual_map.get(sid, "") or "").strip()
-            base = f"{sid} — {nm}" if nm else sid
-            label = f"{base} — [{ql}]" if ql else base
-            global_top_students_att.append({"id": sid, "label": label, "count": int(v)})
-        global_top_students_att = global_top_students_att[:200]
-
-        grp_gq = df[att_mask].groupby(["_qual", col_student]).size()
-        for (ql, sid_raw), v in grp_gq.items():
-            sid = _sid(sid_raw); ql = str(ql)
-            nm = (name_map.get(sid, "") or "").strip()
-            base = f"{sid} — {nm}" if nm else sid
-            label = f"{base} — [{ql}]" if ql else base
-            global_top_students_att_by_qual.setdefault(ql, []).append({"id": sid, "label": label, "count": int(v)})
-        for ql in list(global_top_students_att_by_qual.keys()):
-            global_top_students_att_by_qual[ql].sort(key=lambda x: x["count"], reverse=True)
-            global_top_students_att_by_qual[ql] = global_top_students_att_by_qual[ql][:200]
-
-    # ---------- Module heatmap (per module, per student, per week) ----------
-    module_heatmap = {}
-    if col_module and col_student and col_week:
-        totals = df.groupby([col_module, col_student, col_week]).size()
-        att = df[att_mask].groupby([col_module, col_student, col_week]).size()
-
-        for (mod, sid_raw, wk), tot in totals.items():
-            mod = str(mod); sid = _sid(sid_raw); wk = str(wk)
-            att_count = int(att.get((mod, sid_raw, wk), 0))
-            module_heatmap.setdefault(mod, {}).setdefault(sid, {})[wk] = [int(att_count), int(tot)]
+                label = f"{sid} — {nm}" if nm else sid
+                display = f"{label} — [{ql}]" if ql else label
+                global_top_students_att_by_qual.setdefault(ql, []).append({"id": sid, "label": display, "count": int(v)})
+            for ql in list(global_top_students_att_by_qual.keys()):
+                global_top_students_att_by_qual[ql].sort(key=lambda x: x["count"], reverse=True)
+                global_top_students_att_by_qual[ql] = global_top_students_att_by_qual[ql][:200]
 
     # Repeats
     repeated_students = {}
@@ -395,8 +380,6 @@ def build_report(df: pd.DataFrame):
         "global_top_students_att": global_top_students_att,
         "module_top_students_att_by_qual": module_top_students_att_by_qual,
         "global_top_students_att_by_qual": global_top_students_att_by_qual,
-        # heatmap
-        "module_heatmap": module_heatmap,
     }
 
 def create_app():
