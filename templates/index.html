@@ -87,6 +87,11 @@
       </div>
     </section>
 
+    <!-- Active filter summary -->
+    <section class="card" id="activeFilterCard">
+      <div class="muted tiny" id="activeFilters">No filters applied.</div>
+    </section>
+
     <!-- Metrics -->
     <section class="grid grid-3">
       <div class="metric card">
@@ -188,8 +193,40 @@
         </div>
 
         <div class="filters__group">
+          <label for="topBasis">Basis</label>
+          <select id="topBasis" title="How to select the top students">
+            <option value="count" selected>Total absences</option>
+            <option value="rate">Absence rate (%)</option>
+          </select>
+        </div>
+
+        <div class="filters__group">
+          <label for="rateBand">Rate band</label>
+          <select id="rateBand" title="Filter by absence rate band">
+            <option value="">All</option>
+            <option value="low">Low (0–39%)</option>
+            <option value="moderate">Moderate (40–69%)</option>
+            <option value="high">High (70–100%)</option>
+          </select>
+        </div>
+
+        <div class="filters__group">
           <button id="renderTopList" class="btn btn-outline">Refresh list</button>
           <button id="analyzeStudentBtn" class="btn">Analyze selected student</button>
+        </div>
+      </div>
+
+      <!-- legacy heatmap control (kept) -->
+      <div class="filters">
+        <div class="filters__group">
+          <label for="stuModuleForHeatmap">Module for heatmap</label>
+          <select id="stuModuleForHeatmap">
+            <option value="">Pick after selecting a student…</option>
+          </select>
+        </div>
+        <div class="filters__group">
+          <label>&nbsp;</label>
+          <button id="renderStudentHeatmap" class="btn btn-outline">Render heatmap</button>
         </div>
       </div>
 
@@ -217,6 +254,41 @@
         <h3 class="card__title">Risk by module (max severity)</h3>
         <div id="stuRiskModuleTable" class="table-wrapper"></div>
       </div>
+    </section>
+
+    <!-- Student modules summary -->
+    <section class="card" id="stuModSummaryCard">
+      <h3 class="card__title">Student modules summary</h3>
+      <p class="muted tiny">Per-module totals and absence rate (%) for the selected student.</p>
+      <div class="table-wrapper" id="stuModSummaryWrap"></div>
+    </section>
+
+    <!-- Week heatmap with multi-module support -->
+    <section class="card" id="stuHeatmapCard">
+      <div class="card__header" style="display:flex;justify-content:space-between;align-items:flex-end;gap:8px;flex-wrap:wrap;">
+        <h3 class="card__title">Week heatmap (absences)</h3>
+        <div class="filters" style="margin:0;">
+          <div class="filters__group" style="min-width:260px;">
+            <label for="hmModule">Modules (pick 1–3 or All)</label>
+            <select id="hmModule" multiple size="4" title="Pick up to 3 modules"></select>
+          </div>
+          <div class="filters__group">
+            <label for="hmFrom">From</label>
+            <select id="hmFrom"><option value="">Auto</option></select>
+          </div>
+          <div class="filters__group">
+            <label for="hmTo">To</label>
+            <select id="hmTo"><option value="">Auto</option></select>
+          </div>
+          <div class="filters__group">
+            <label>&nbsp;</label>
+            <button id="hmRender" class="btn btn-outline">Render</button>
+          </div>
+        </div>
+      </div>
+      <p class="muted tiny">Red = absent counts in that week for this module. 0 = none.</p>
+      <p class="muted tiny">Legend: <span class="pill hm-legend hm-1">Low</span> <span class="pill hm-legend hm-2">Moderate</span> <span class="pill hm-legend hm-4">High</span></p>
+      <div class="table-wrapper" id="stuHeatmapWrap"></div>
     </section>
     {% endif %}
     <!-- ==================== end Student Analysis ==================== -->
@@ -283,6 +355,7 @@
   {% if report %}
   <script>window.__REPORT__ = {{ report | tojson }};</script>
   {% endif %}
+  <script src="{{ url_for('static', filename='heatmap-addon.js') }}"></script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
