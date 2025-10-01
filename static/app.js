@@ -4,7 +4,7 @@
   const key = "soit_theme";
   const btn = document.getElementById("themeToggle");
   function apply(theme) {
-    if (theme === "light") { body.setAttriacbute("data-theme", "light"); if (btn) btn.textContent = "Dark mode"; }
+    if (theme === "light") { body.setAttribute("data-theme", "light"); if (btn) btn.textContent = "Dark mode"; }
     else { body.removeAttribute("data-theme"); if (btn) btn.textContent = "Light mode"; }
   }
   apply(localStorage.getItem(key) || "dark");
@@ -293,31 +293,54 @@
   }
 })();
 
-  // NEW: total absences per module
-  if (report.total_absences_by_module) {
-    const labels = Object.keys(report.total_absences_by_module);
-    const values = Object.values(report.total_absences_by_module);
-    new Chart(document.getElementById("moduleAbsChart"), {
-      type: "bar",
-      data: {
-        labels: labels,
-        datasets: [{
-          label: "Total absences",
-          data: values,
-          backgroundColor: "rgba(255, 99, 132, 0.6)",
-          borderColor: "rgba(255, 99, 132, 1)",
-          borderWidth: 1
-        }]
-      },
-      options: {
-        responsive: true,
-        plugins: {
-          legend: { display: false },
-          title: { display: true, text: "Total absences per module" }
-        },
-        scales: {
-          y: { beginAtZero: true }
-        }
-      }
-    });
+
+// ============ Absence Chart with Filter ============
+function renderAbsenceChart(moduleFilter="") {
+  const ctx = document.getElementById("moduleAbsChart");
+  if (!ctx) return;
+
+  let labels = Object.keys(report.total_absences_by_module || {});
+  let values = Object.values(report.total_absences_by_module || {});
+
+  if (moduleFilter) {
+    labels = labels.filter((m) => m === moduleFilter);
+    values = values.filter((_, i) => labels[i] === moduleFilter);
   }
+
+  if (window.absChartInstance) window.absChartInstance.destroy();
+
+  window.absChartInstance = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: labels,
+      datasets: [{
+        label: "Total absences",
+        data: values,
+        backgroundColor: "rgba(255, 159, 64, 0.6)",
+        borderColor: "rgba(255, 159, 64, 1)",
+        borderWidth: 1
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        title: { display: true, text: "Total absences per module" }
+      },
+      scales: {
+        y: { beginAtZero: true }
+      }
+    }
+  });
+}
+
+// Initial render
+renderAbsenceChart();
+
+// Filter change listener
+const absFilter = document.getElementById("absModuleFilter");
+if (absFilter) {
+  absFilter.addEventListener("change", (e) => {
+    renderAbsenceChart(e.target.value);
+  });
+}
