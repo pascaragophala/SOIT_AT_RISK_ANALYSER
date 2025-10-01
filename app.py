@@ -105,7 +105,13 @@ def build_report(df: pd.DataFrame) -> dict:
         tmp = df[att_mask].groupby(col_module)[col_student].nunique().sort_values(ascending=False)
         by_module_att = {str(k): int(v) for k, v in tmp.items()}
 
-    # non-attendance per week (unique students)
+    
+    # NEW: total absences per module (all records, not just unique students)
+    total_absences_by_module = {}
+    if col_module and att_mask is not None:
+        tmp = df[att_mask].groupby(col_module).size().sort_values(ascending=False)
+        total_absences_by_module = {str(k): int(v) for k, v in tmp.items()}
+# non-attendance per week (unique students)
     by_week_att = {}
     if col_week and col_student and att_mask is not None:
         tmp = df[att_mask].groupby(col_week)[col_student].nunique()
@@ -314,6 +320,7 @@ def build_report(df: pd.DataFrame) -> dict:
         "qualifications": quals,
         "by_module": by_module,
         "by_module_attendance": by_module_att,
+        "total_absences_by_module": total_absences_by_module,
         "by_week_attendance": by_week_att,
         "by_week_module_all": by_week_module_all,
         "by_week_module_attendance": by_week_module_att,
