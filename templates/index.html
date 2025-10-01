@@ -80,6 +80,16 @@
           </select>
         </div>
 
+        
+        <div class="filters__group">
+          <label for="absModuleFilter">Absence chart filter</label>
+          <select id="absModuleFilter">
+            <option value="">All modules</option>
+            {% for m in report.modules %}
+              <option value="{{ m }}">{{ m }}</option>
+            {% endfor %}
+          </select>
+        </div>
         <div class="filters__group">
           <button id="applyFilters" class="btn btn-outline">Apply filters</button>
           <button id="resetFilters" class="btn btn-outline">Reset</button>
