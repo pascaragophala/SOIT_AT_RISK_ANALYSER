@@ -80,16 +80,6 @@
           </select>
         </div>
 
-        
-        <div class="filters__group">
-          <label for="absModuleFilter">Absence chart filter</label>
-          <select id="absModuleFilter">
-            <option value="">All modules</option>
-            {% for m in report.modules %}
-              <option value="{{ m }}">{{ m }}</option>
-            {% endfor %}
-          </select>
-        </div>
         <div class="filters__group">
           <button id="applyFilters" class="btn btn-outline">Apply filters</button>
           <button id="resetFilters" class="btn btn-outline">Reset</button>
@@ -137,11 +127,6 @@
         <h3 class="card__title">Modules (unique students)</h3>
         <div class="chart" id="moduleChartWrap"><canvas id="moduleChart"></canvas></div>
       </div>
-  <div class="card">
-    <h3 class="card__title">Modules (total absences)</h3>
-    <div class="chart" id="moduleAbsChartWrap"><canvas id="moduleAbsChart"></canvas></div>
-  </div>
-
       <div class="card" id="resolvedCard">
         <h3 class="card__title">Resolved status</h3>
         <div class="chart h-260"><canvas id="resolvedChart"></canvas></div>
