@@ -50,8 +50,54 @@ def _sort_weeks_like(weeks) -> list:
     return [w for _, w in sorted(zip(nums, s))]
 
 
+
+# ---------------- cleaning ----------------
+def _strip_obj_cols(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for c in df.columns:
+        if pd.api.types.is_object_dtype(df[c]):
+            df[c] = df[c].astype(str).str.strip()
+            df[c].replace({"": pd.NA}, inplace=True)
+    return df
+
+
+def clean_dataframe(df: pd.DataFrame):
+    # Clean raw Excel into valid records:
+    # - Trim column names and string cells
+    # - Drop fully-empty rows
+    # - Keep rows even if Student Number is missing (for catalogue parity)
+    # - No deduplication
+    stats = {}
+    df0 = df.copy()
+    df0.columns = [str(c).strip() for c in df0.columns]
+    stats["rows_raw"] = int(len(df0))
+
+    # Strip whitespace in object columns and normalize blanks to NA
+    def _strip_obj_cols(df_in: pd.DataFrame) -> pd.DataFrame:
+        df_in = df_in.copy()
+        for c in df_in.columns:
+            if pd.api.types.is_object_dtype(df_in[c]):
+                df_in[c] = df_in[c].astype(str).str.strip()
+                df_in[c].replace({"": pd.NA}, inplace=True)
+        return df_in
+
+    df1 = _strip_obj_cols(df0)
+    df1 = df1.dropna(how="all")
+    stats["rows_after_drop_all_empty"] = int(len(df1))
+
+    # No dropping based on Student Number
+    stats["dropped_missing_student_number"] = 0
+
+    # No deduplication to preserve raw record counts
+    stats["dropped_duplicates_full_row"] = 0
+
+    stats["rows_final"] = int(len(df1))
+    return df1, stats
+
 # ---------------- core report builder ----------------
 def build_report(df: pd.DataFrame) -> dict:
+    # Clean first
+    df, cleaning_stats = clean_dataframe(df)
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -63,6 +109,7 @@ def build_report(df: pd.DataFrame) -> dict:
     col_reason  = next((c for c in df.columns if "reason" in c.lower()), None)
     col_risk    = next((c for c in df.columns if "risk" in c.lower()), None)
     col_resolved= next((c for c in df.columns if "resolved" in c.lower()), None)
+    col_interv = next((c for c in df.columns if "intervention" in c.lower()), None)
     col_qual    = next((c for c in df.columns if ("qual" in c.lower()
                                                   or "program" in c.lower()
                                                   or "programme" in c.lower()
@@ -75,7 +122,36 @@ def build_report(df: pd.DataFrame) -> dict:
     else:
         df["_qual"] = "Unknown"
 
-    total_records = int(len(df))
+        # Total records: Student Number present OR (Student Name & Module(s) & Week present)
+    col_student = next((c for c in df.columns if c.lower().startswith("student number")), None)
+    col_name    = next((c for c in df.columns if c.lower().startswith("student name")), None)
+    col_module  = next((c for c in df.columns if c.lower().startswith("module")), None)
+    col_week    = next((c for c in df.columns if c.lower() == "week"), None)
+    def _nonempty(s):
+        return s.astype(str).str.strip().replace({"": pd.NA, "nan": pd.NA}).notna()
+    has_sn = _nonempty(df[col_student]) if col_student else pd.Series([False]*len(df))
+    has_triplet = (
+        (_nonempty(df[col_name]) if col_name else False) &
+        (_nonempty(df[col_module]) if col_module else False) &
+        (_nonempty(df[col_week]) if col_week else False)
+    )
+        # Total records: SN present OR (Name & Module & Week present)
+    col_student = next((c for c in df.columns if c.lower().startswith("student number")), None)
+    col_name    = next((c for c in df.columns if c.lower().startswith("student name")), None)
+    col_module  = next((c for c in df.columns if c.lower().startswith("module")), None)
+    col_week    = next((c for c in df.columns if c.lower() == "week"), None)
+    def _nonempty(s):
+        return s.astype(str).str.strip().replace({"": pd.NA, "nan": pd.NA}).notna()
+    has_sn = _nonempty(df[col_student]) if col_student else pd.Series([False]*len(df))
+    has_triplet = (
+        (_nonempty(df[col_name]) if col_name else False) &
+        (_nonempty(df[col_module]) if col_module else False) &
+        (_nonempty(df[col_week]) if col_week else False)
+    )
+    total_records = int((has_sn | has_triplet).sum())
+    unique_students = int(df[col_student].dropna().astype(str).nunique()) if col_student else 0
+
+
     unique_students = int(df[col_student].nunique()) if col_student else None
 
     # non-attendance mask (tolerant)
@@ -86,7 +162,15 @@ def build_report(df: pd.DataFrame) -> dict:
 
     # globals
     risk_counts     = _counts(df[col_risk].value_counts(dropna=False)) if col_risk else {}
-    resolved_counts = _counts(df[col_resolved].value_counts(dropna=False)) if col_resolved else {}
+    # Resolved status via Intervention non-empty
+    if "col_interv" in locals() and col_interv:
+        vals = df[col_interv].astype(str).str.strip()
+        yes = int(vals.replace({"": pd.NA, "nan": pd.NA}).notna().sum())
+        no = int(len(vals) - yes)
+        resolved = {"Yes": yes, "No": no}
+        resolved_counts = resolved
+    else:
+        resolved_counts = _counts(df[col_resolved].value_counts(dropna=False)) if col_resolved else {}
     by_reason       = _counts(df[col_reason].value_counts().head(15)) if col_reason else {}
 
     weeks   = _sort_weeks_like(df[col_week].dropna().unique()) if col_week else []
@@ -105,13 +189,7 @@ def build_report(df: pd.DataFrame) -> dict:
         tmp = df[att_mask].groupby(col_module)[col_student].nunique().sort_values(ascending=False)
         by_module_att = {str(k): int(v) for k, v in tmp.items()}
 
-    
-    # NEW: total absences per module (all records, not just unique students)
-    total_absences_by_module = {}
-    if col_module and att_mask is not None:
-        tmp = df[att_mask].groupby(col_module).size().sort_values(ascending=False)
-        total_absences_by_module = {str(k): int(v) for k, v in tmp.items()}
-# non-attendance per week (unique students)
+    # non-attendance per week (unique students)
     by_week_att = {}
     if col_week and col_student and att_mask is not None:
         tmp = df[att_mask].groupby(col_week)[col_student].nunique()
@@ -142,9 +220,13 @@ def build_report(df: pd.DataFrame) -> dict:
 
     # resolved rate by week (%)
     resolved_rate = {}
-    if col_week and col_resolved:
-        vals = df[col_resolved].astype(str).str.strip().str.lower()
-        truthy = vals.isin({"yes", "y", "true", "1", "resolved"})
+    if col_week and (("col_interv" in locals() and col_interv) or col_resolved):
+        if ("col_interv" in locals() and col_interv):
+            vals = df[col_interv].astype(str).str.strip()
+            truthy = vals.replace({"": pd.NA, "nan": pd.NA}).notna()
+        else:
+            vals = df[col_resolved].astype(str).str.strip().str.lower()
+            truthy = vals.isin({"yes", "y", "true", "1", "resolved"})
         grp = df.groupby(col_week)
         totals = grp.size()
         trues = grp.apply(lambda g: int(truthy.loc[g.index].sum()))
@@ -310,6 +392,7 @@ def build_report(df: pd.DataFrame) -> dict:
     sample_rows = df.head(50).fillna("").to_dict(orient="records")
 
     return {
+        "cleaning_stats": cleaning_stats,
         "total_records": total_records,
         "unique_students": unique_students,
         "risk_counts": risk_counts,
@@ -320,7 +403,6 @@ def build_report(df: pd.DataFrame) -> dict:
         "qualifications": quals,
         "by_module": by_module,
         "by_module_attendance": by_module_att,
-        "total_absences_by_module": total_absences_by_module,
         "by_week_attendance": by_week_att,
         "by_week_module_all": by_week_module_all,
         "by_week_module_attendance": by_week_module_att,
