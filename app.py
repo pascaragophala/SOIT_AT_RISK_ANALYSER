@@ -4,6 +4,7 @@ from io import BytesIO
 from flask import Flask, render_template, request
 import pandas as pd
 from werkzeug.utils import secure_filename
+from flask import send_file
 
 # ---------------- basic config ----------------
 ALLOWED_EXTENSIONS = {"xlsx", "xls"}
@@ -396,6 +397,53 @@ def build_report(df: pd.DataFrame) -> dict:
     # sample rows
     sample_rows = df.head(50).fillna("").to_dict(orient="records")
 
+    # ---------------- HIGH RISK STUDENTS (DEDUPED) ----------------
+    high_risk_students = []
+
+    if col_student and col_risk:
+        # identify HIGH risk rows
+        high_mask = df[col_risk].astype(str).str.lower().str.contains("high", na=False)
+        df_high = df[high_mask].copy()
+
+        if not df_high.empty:
+            grouped = df_high.groupby(col_student)
+
+            for sid_raw, g in grouped:
+                sid = _sid(sid_raw)
+
+                name = ""
+                if col_name and col_name in g.columns:
+                    name = g[col_name].dropna().astype(str).iloc[0] if not g[col_name].dropna().empty else ""
+
+                year_registered = ""
+                if "Year Registered" in g.columns:
+                    year_registered = g["Year Registered"].dropna().astype(str).iloc[0] if not g["Year Registered"].dropna().empty else ""
+
+                programme = g["_qual"].iloc[0] if "_qual" in g.columns else ""
+
+                modules = sorted(g[col_module].dropna().astype(str).unique().tolist()) if col_module else []
+                modules_str = ", ".join(modules)
+
+                high_risk_students.append({
+                    "student_number": sid,
+                    "name": name,
+                    "year_registered": year_registered,
+                    "programme": programme,
+                    "modules": modules_str,
+                    "engagement_risk": "High",
+                    "absenteeism_risk": "High",
+                    "assessment_risk": "High",
+                    "special_needs": "",
+                    "action_lecturer": "",
+                    "action_academic_manager": "",
+                    "action_programme_officer": "",
+                    "action_c4as": "",
+                    "action_finance": "",
+                    "action_hoc": "",
+                    "campus_decision": "",
+                    "notes": ""
+                })
+
     return {
         "cleaning_stats": cleaning_stats,
         "total_records": total_records,
@@ -431,6 +479,7 @@ def build_report(df: pd.DataFrame) -> dict:
         "module_top_students_att": module_top_students_att,
 
         "sample_rows": sample_rows,
+        "high_risk_students": high_risk_students,
     }
 
 
@@ -461,6 +510,27 @@ def upload():
         return render_template("index.html", report=report, filename=secure_filename(f.filename), error=None)
     except Exception as e:
         return render_template("index.html", report=None, filename=None, error=f"Failed to read Excel: {e}")
+
+@app.route("/export-high-risk", methods=["POST"])
+def export_high_risk():
+    report = request.environ.get("report_cache")
+    if not report or "high_risk_students" not in report:
+        return "No data available"
+
+    df = pd.DataFrame(report["high_risk_students"])
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="High Risk Students")
+
+    output.seek(0)
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name="High_Risk_Students.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 
 if __name__ == "__main__":
