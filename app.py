@@ -5,6 +5,9 @@ from flask import Flask, render_template, request
 import pandas as pd
 from werkzeug.utils import secure_filename
 from flask import send_file
+from flask import session
+
+
 
 # ---------------- basic config ----------------
 ALLOWED_EXTENSIONS = {"xlsx", "xls"}
@@ -485,6 +488,7 @@ def build_report(df: pd.DataFrame) -> dict:
 
 # ---------------- flask app ----------------
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "super-secret-key")
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64MB
 
 @app.route("/", methods=["GET"])
@@ -507,17 +511,19 @@ def upload():
         content = f.read()
         df = pd.read_excel(BytesIO(content))
         report = build_report(df)
+        session["high_risk_students"] = report.get("high_risk_students", [])
         return render_template("index.html", report=report, filename=secure_filename(f.filename), error=None)
     except Exception as e:
         return render_template("index.html", report=None, filename=None, error=f"Failed to read Excel: {e}")
 
 @app.route("/export-high-risk", methods=["POST"])
 def export_high_risk():
-    report = request.environ.get("report_cache")
-    if not report or "high_risk_students" not in report:
+    high_risk = session.get("high_risk_students")
+
+    if not high_risk:
         return "No data available"
 
-    df = pd.DataFrame(report["high_risk_students"])
+    df = pd.DataFrame(high_risk)
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -534,4 +540,5 @@ def export_high_risk():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
