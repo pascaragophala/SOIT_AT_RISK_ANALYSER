@@ -344,6 +344,66 @@
       </div>
     </section>
     {% endif %}
+	
+	{% if report.high_risk_students and report.high_risk_students|length > 0 %}
+	<section class="card">
+	  <div class="card__header">
+		<h3 class="card__title">High Risk Students (All Modules Combined)</h3>
+		<form action="{{ url_for('export_high_risk') }}" method="post">
+		  <button type="submit" class="btn btn-outline">Export to Excel</button>
+		</form>
+	  </div>
+
+	  <div class="table-wrapper">
+		<table>
+		  <thead>
+			<tr>
+			  <th>Student Number</th>
+			  <th>Name & Surname</th>
+			  <th>Year Registered</th>
+			  <th>Programme</th>
+			  <th>Modules</th>
+			  <th>Engagement Risk</th>
+			  <th>Absenteeism Risk</th>
+			  <th>Assessment Risk</th>
+			  <th>Special Needs</th>
+			  <th>Action Lecturer</th>
+			  <th>Action Academic Manager</th>
+			  <th>Action Programme Officer</th>
+			  <th>Action C4AS</th>
+			  <th>Action Finance</th>
+			  <th>Action HOC</th>
+			  <th>Campus Decision</th>
+			  <th>Notes</th>
+			</tr>
+		  </thead>
+		  <tbody>
+			{% for s in report.high_risk_students %}
+			<tr>
+			  <td>{{ s.student_number }}</td>
+			  <td>{{ s.name }}</td>
+			  <td>{{ s.year_registered }}</td>
+			  <td>{{ s.programme }}</td>
+			  <td>{{ s.modules }}</td>
+			  <td>{{ s.engagement_risk }}</td>
+			  <td>{{ s.absenteeism_risk }}</td>
+			  <td>{{ s.assessment_risk }}</td>
+			  <td>{{ s.special_needs }}</td>
+			  <td contenteditable="true"></td>
+			  <td contenteditable="true"></td>
+			  <td contenteditable="true"></td>
+			  <td contenteditable="true"></td>
+			  <td contenteditable="true"></td>
+			  <td contenteditable="true"></td>
+			  <td contenteditable="true"></td>
+			  <td contenteditable="true"></td>
+			</tr>
+			{% endfor %}
+		  </tbody>
+		</table>
+	  </div>
+	</section>
+	{% endif %}
   </main>
 
   <footer class="footer">
