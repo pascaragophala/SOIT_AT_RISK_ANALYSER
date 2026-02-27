@@ -509,34 +509,53 @@ def upload():
 
     try:
         content = f.read()
+        session["uploaded_excel"] = content.hex()   # store raw file safely
+
         df = pd.read_excel(BytesIO(content))
         report = build_report(df)
-        session["high_risk_students"] = report.get("high_risk_students", [])
-        return render_template("index.html", report=report, filename=secure_filename(f.filename), error=None)
+
+        return render_template(
+            "index.html",
+            report=report,
+            filename=secure_filename(f.filename),
+            error=None
+        )
     except Exception as e:
         return render_template("index.html", report=None, filename=None, error=f"Failed to read Excel: {e}")
 
 @app.route("/export-high-risk", methods=["POST"])
 def export_high_risk():
-    high_risk = session.get("high_risk_students")
+    raw = session.get("uploaded_excel")
 
-    if not high_risk:
+    if not raw:
         return "No data available"
 
-    df = pd.DataFrame(high_risk)
+    try:
+        content = bytes.fromhex(raw)
+        df = pd.read_excel(BytesIO(content))
+        report = build_report(df)
+        high_risk = report.get("high_risk_students", [])
 
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="High Risk Students")
+        if not high_risk:
+            return "No data available"
 
-    output.seek(0)
+        df_export = pd.DataFrame(high_risk)
 
-    return send_file(
-        output,
-        as_attachment=True,
-        download_name="High_Risk_Students.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            df_export.to_excel(writer, index=False, sheet_name="High Risk Students")
+
+        output.seek(0)
+
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name="High_Risk_Students.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        return f"Export failed: {e}"
 
 
 if __name__ == "__main__":
