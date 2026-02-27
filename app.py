@@ -550,7 +550,7 @@ def export_high_risk():
         df_export = pd.DataFrame(high_risk)
 
         output = BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        with pd.ExcelWriter(output) as writer:
             df_export.to_excel(writer, index=False, sheet_name="High Risk Students")
 
         output.seek(0)
