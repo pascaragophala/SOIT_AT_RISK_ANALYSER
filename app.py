@@ -1,5 +1,6 @@
 import os
 import re
+import uuid
 from io import BytesIO
 from flask import Flask, render_template, request
 import pandas as pd
@@ -509,7 +510,15 @@ def upload():
 
     try:
         content = f.read()
-        session["uploaded_excel"] = content.hex()   # store raw file safely
+
+        # create unique temp filename
+        tmp_name = f"/tmp/{uuid.uuid4()}.xlsx"
+
+        with open(tmp_name, "wb") as temp_file:
+            temp_file.write(content)
+
+        # store ONLY the file path (small string)
+        session["uploaded_excel_path"] = tmp_name
 
         df = pd.read_excel(BytesIO(content))
         report = build_report(df)
@@ -525,14 +534,13 @@ def upload():
 
 @app.route("/export-high-risk", methods=["POST"])
 def export_high_risk():
-    raw = session.get("uploaded_excel")
+    path = session.get("uploaded_excel_path")
 
-    if not raw:
+    if not path or not os.path.exists(path):
         return "No data available"
 
     try:
-        content = bytes.fromhex(raw)
-        df = pd.read_excel(BytesIO(content))
+        df = pd.read_excel(path)
         report = build_report(df)
         high_risk = report.get("high_risk_students", [])
 
