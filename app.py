@@ -156,9 +156,6 @@ def build_report(df: pd.DataFrame) -> dict:
     total_records = int((has_sn | has_triplet).sum())
     unique_students = int(df[col_student].dropna().astype(str).nunique()) if col_student else 0
 
-
-    unique_students = int(df[col_student].nunique()) if col_student else None
-
     # non-attendance mask (tolerant)
     att_mask = None
     if col_reason:
@@ -427,6 +424,49 @@ def build_report(df: pd.DataFrame) -> dict:
 
                 modules = sorted(g[col_module].dropna().astype(str).unique().tolist()) if col_module else []
                 modules_str = ", ".join(modules)
+                
+                # ---------------- Engagement Risk ----------------
+                engagement_risk = ""
+
+                if col_reason and col_module:
+                    engagement_rows = g[
+                        g[col_reason].astype(str).str.contains(
+                            "Canvas Activity_007",
+                            case=False,
+                            na=False
+                        )
+                    ]
+
+                    if not engagement_rows.empty:
+                        engagement_modules = sorted(
+                            engagement_rows[col_module]
+                            .dropna()
+                            .astype(str)
+                            .unique()
+                            .tolist()
+                        )
+
+                        engagement_risk = f"HIGH({','.join(engagement_modules)})"
+                        
+                # ---------------- Assessment Risk ----------------
+                assessment_risk = ""
+
+                if col_reason:
+                    if g[col_reason].astype(str).str.contains(
+                        "Non-Participation in Formal Assessment_006",
+                        case=False,
+                        na=False
+                    ).any():
+
+                        assessment_risk = "HIGH(Non-Participation in Formal Assessment_006)"
+
+                    elif g[col_reason].astype(str).str.contains(
+                        "Poor Participation in Formal Assessment_006",
+                        case=False,
+                        na=False
+                    ).any():
+
+                        assessment_risk = "HIGH(Poor Participation in Formal Assessment_006)"
 
                 high_risk_students.append({
                     "student_number": sid,
@@ -434,9 +474,9 @@ def build_report(df: pd.DataFrame) -> dict:
                     "year_registered": year_registered,
                     "programme": programme,
                     "modules": modules_str,
-                    "engagement_risk": "High",
+                    "engagement_risk": engagement_risk,
                     "absenteeism_risk": "High",
-                    "assessment_risk": "High",
+                    "assessment_risk": assessment_risk,
                     "special_needs": "",
                     "action_lecturer": "",
                     "action_academic_manager": "",
