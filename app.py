@@ -41,6 +41,53 @@ def _canon_qual(x: str) -> str:
     if s in {"HCS", "HCS-B"}:
         return "HCS"
     return s if s else "Unknown"
+    
+def transform_to_tracker(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # ---- safely find columns ----
+    def get_col(name):
+        return next((c for c in df.columns if name.lower() in c.lower()), None)
+
+    col_student = get_col("student number")
+    col_qual    = get_col("qualification")
+    col_year    = get_col("year")
+    col_risk    = get_col("risk")
+    col_notes   = get_col("notes")
+    col_interv  = get_col("intervention")
+
+    # ---- create new dataframe ----
+    new_df = pd.DataFrame()
+
+    # Student Number (cleaned)
+    new_df["Student Number"] = df[col_student].apply(_sid) if col_student else ""
+
+    # Use today's date
+    new_df["Date"] = pd.Timestamp.today().strftime("%Y-%m-%d")
+
+    # Programme
+    new_df["Programme"] = df[col_qual] if col_qual else ""
+
+    # Year of study
+    new_df["Year of study"] = df[col_year] if col_year else ""
+
+    # Risk
+    new_df["Risk"] = df[col_risk] if col_risk else ""
+
+    # Actions (only lecturer auto-filled)
+    interv_vals = df[col_interv] if col_interv else ""
+
+    new_df["Action Taken by Lecturer"] = interv_vals
+    new_df["Action Taken by Academic Manager"] = ""
+    new_df["Action Taken by Programme Officer"] = ""
+    new_df["Action Taken by C4AS Manager"] = ""
+
+    # Notes
+    new_df["Notes"] = df[col_notes] if col_notes else ""
+
+    return new_df
+    
 
 def _counts(series: pd.Series) -> dict:
     out = {}
@@ -571,6 +618,42 @@ def upload():
         )
     except Exception as e:
         return render_template("index.html", report=None, filename=None, error=f"Failed to read Excel: {e}")
+        
+@app.route("/convert-tracker", methods=["POST"])
+def convert_tracker():
+    file = request.files.get("file")
+
+    # ---- validation ----
+    if not file or file.filename == "":
+        return render_template("index.html", error="Please upload a file.")
+
+    if not allowed_file(file.filename):
+        return render_template("index.html", error="Only Excel files allowed.")
+
+    try:
+        # ---- read file ----
+        df = pd.read_excel(file)
+
+        # ---- transform ----
+        transformed = transform_to_tracker(df)
+
+        # ---- export to memory ----
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            transformed.to_excel(writer, index=False, sheet_name="Tracker")
+
+        output.seek(0)
+
+        # ---- send file ----
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name="At_Risk_Tracker.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        return render_template("index.html", error=f"Conversion failed: {str(e)}")
 
 @app.route("/export-high-risk", methods=["POST"])
 def export_high_risk():
