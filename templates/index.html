@@ -404,6 +404,22 @@
 	  </div>
 	</section>
 	{% endif %}
+	
+	
+	<section class="card card--pad-lg">
+	  <h3 class="card__title">Convert to At-Risk Tracker</h3>
+
+	  <p class="muted tiny">
+		Upload your SEM file (e.g. 2026_SOIT_AtRisk_CEN-SEM_1 or SEM_2) and convert it into the official tracker format.
+	  </p>
+
+	  <form action="{{ url_for('convert_tracker') }}" method="post" enctype="multipart/form-data" class="upload">
+		<div class="upload__row">
+		  <input type="file" name="file" accept=".xlsx,.xls" required>
+		  <button type="submit" class="btn">Convert & Download</button>
+		</div>
+	  </form>
+	</section>
   </main>
 
   <footer class="footer">
