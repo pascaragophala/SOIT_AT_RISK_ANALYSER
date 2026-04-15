@@ -55,6 +55,7 @@ def transform_to_tracker(df: pd.DataFrame) -> pd.DataFrame:
     col_year    = get_col("year")
     col_risk    = get_col("risk")
     col_notes   = get_col("notes")
+    col_reason = get_col("reason")
     col_interv = next(
         (c for c in df.columns if "intervention" in c.lower()),
         None
@@ -62,6 +63,13 @@ def transform_to_tracker(df: pd.DataFrame) -> pd.DataFrame:
 
     if not col_student or not col_risk:
         raise ValueError("Required columns (Student Number / Risk) not found.")
+
+    reason_map = {
+        "canvas activity": "Engagement – Canvas",
+        "class attendance": "Engagement – Attendance",
+        "non-participation": "Missing assessment",
+        "poor participation": "Assessment – Failure"
+    }
 
     # ---- clean student number ----
     df["_sid"] = df[col_student].apply(_sid)
@@ -79,7 +87,12 @@ def transform_to_tracker(df: pd.DataFrame) -> pd.DataFrame:
 
     for sid, g in grouped:
         programme = g[col_qual].dropna().astype(str).iloc[0] if col_qual else ""
-        year = g[col_year].dropna().astype(str).iloc[0] if col_year else ""
+        year = ""
+        if col_year:
+            vals = g[col_year].dropna().astype(str)
+            if not vals.empty:
+                raw_year = vals.iloc[0]
+                year = re.sub(r"\D", "", raw_year)
 
         # combine interventions
         lecturer_action = ""
@@ -97,12 +110,31 @@ def transform_to_tracker(df: pd.DataFrame) -> pd.DataFrame:
         if col_notes:
             notes = " | ".join(g[col_notes].dropna().astype(str).unique())
 
+        risk_value = ""
+
+        if col_reason:
+            reasons = g[col_reason].dropna().astype(str).str.lower()
+
+            mapped = []
+
+            for r in reasons:
+                if "canvas activity" in r:
+                    mapped.append(reason_map["canvas activity"])
+                if "class attendance" in r:
+                    mapped.append(reason_map["class attendance"])
+                if "non-participation" in r:
+                    mapped.append(reason_map["non-participation"])
+                if "poor participation" in r:
+                    mapped.append(reason_map["poor participation"])
+
+            # remove duplicates + keep clean
+            risk_value = " | ".join(sorted(set(mapped))) if mapped else "Other"
         rows.append({
             "Student Number": sid,
             "Date": pd.Timestamp.today().strftime("%Y-%m-%d"),
             "Programme": programme,
             "Year of study": year,
-            "Risk": "HIGH",
+            "Risk": risk_value,
             "Action Taken by Lecturer": lecturer_action,
             "Action Taken by Academic Manager": "",
             "Action Taken by Programme Officer": "",
