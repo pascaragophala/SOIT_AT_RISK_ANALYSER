@@ -55,7 +55,10 @@ def transform_to_tracker(df: pd.DataFrame) -> pd.DataFrame:
     col_year    = get_col("year")
     col_risk    = get_col("risk")
     col_notes   = get_col("notes")
-    col_interv  = get_col("intervention")
+    col_interv = next(
+        (c for c in df.columns if "intervention" in c.lower()),
+        None
+    )
 
     if not col_student or not col_risk:
         raise ValueError("Required columns (Student Number / Risk) not found.")
@@ -81,7 +84,13 @@ def transform_to_tracker(df: pd.DataFrame) -> pd.DataFrame:
         # combine interventions
         lecturer_action = ""
         if col_interv:
-            lecturer_action = " | ".join(g[col_interv].dropna().astype(str).unique())
+            lecturer_action = " | ".join(
+                g[col_interv]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .unique()
+            )
 
         # combine notes
         notes = ""
