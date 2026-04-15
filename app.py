@@ -57,37 +57,57 @@ def transform_to_tracker(df: pd.DataFrame) -> pd.DataFrame:
     col_notes   = get_col("notes")
     col_interv  = get_col("intervention")
 
-    # ---- create new dataframe ----
-    new_df = pd.DataFrame()
+    if not col_student or not col_risk:
+        raise ValueError("Required columns (Student Number / Risk) not found.")
 
-    # Student Number (cleaned)
-    new_df["Student Number"] = df[col_student].apply(_sid) if col_student else ""
+    # ---- clean student number ----
+    df["_sid"] = df[col_student].apply(_sid)
 
-    # Use today's date
-    new_df["Date"] = pd.Timestamp.today().strftime("%Y-%m-%d")
+    # ---- KEEP ONLY HIGH RISK ----
+    df_high = df[df[col_risk].astype(str).str.contains("high", case=False, na=False)].copy()
 
-    # Programme
-    new_df["Programme"] = df[col_qual] if col_qual else ""
+    if df_high.empty:
+        raise ValueError("No HIGH risk students found in the file.")
 
-    # Year of study
-    new_df["Year of study"] = df[col_year] if col_year else ""
+    # ---- group by student (removes duplicates) ----
+    grouped = df_high.groupby("_sid")
 
-    # Risk
-    new_df["Risk"] = df[col_risk] if col_risk else ""
+    rows = []
 
-    # Actions (only lecturer auto-filled)
-    interv_vals = df[col_interv] if col_interv else ""
+    for sid, g in grouped:
+        programme = g[col_qual].dropna().astype(str).iloc[0] if col_qual else ""
+        year = g[col_year].dropna().astype(str).iloc[0] if col_year else ""
 
-    new_df["Action Taken by Lecturer"] = interv_vals
-    new_df["Action Taken by Academic Manager"] = ""
-    new_df["Action Taken by Programme Officer"] = ""
-    new_df["Action Taken by C4AS Manager"] = ""
+        # combine interventions
+        lecturer_action = ""
+        if col_interv:
+            lecturer_action = " | ".join(g[col_interv].dropna().astype(str).unique())
 
-    # Notes
-    new_df["Notes"] = df[col_notes] if col_notes else ""
+        # combine notes
+        notes = ""
+        if col_notes:
+            notes = " | ".join(g[col_notes].dropna().astype(str).unique())
+
+        rows.append({
+            "Student Number": sid,
+            "Date": pd.Timestamp.today().strftime("%Y-%m-%d"),
+            "Programme": programme,
+            "Year of study": year,
+            "Risk": "HIGH",
+            "Action Taken by Lecturer": lecturer_action,
+            "Action Taken by Academic Manager": "",
+            "Action Taken by Programme Officer": "",
+            "Action Taken by C4AS Manager": "",
+            "Notes": notes
+        })
+
+    new_df = pd.DataFrame(rows)
+
+    # ---- FINAL SAFETY: remove any accidental duplicates ----
+    new_df = new_df.drop_duplicates(subset=["Student Number"])
 
     return new_df
-    
+
 
 def _counts(series: pd.Series) -> dict:
     out = {}
